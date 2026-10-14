@@ -1,0 +1,22 @@
+{
+  // Microphone with noise suppression, plus the Soundrio soundboard, sent to a
+  // virtual microphone. The suppression is applied to the microphone only,
+  // before the soundboard is mixed in.
+  //
+  // In Mumble, Discord or wherever friends should hear this, choose
+  // "CABLE Output" as the microphone and turn off that program's own noise
+  // suppression: it would treat the soundboard as noise. Soundrio keeps
+  // playing on your own output as usual.
+  "nodes": [
+    { "id": "mic",         "type": "input",   "device": "Razer Seiren Mini" },
+    { "id": "denoise",     "type": "rnnoise" },
+    // Soundrio runs as a Java process, so it is picked out by its folder.
+    { "id": "soundrio",    "type": "app",     "process": "\\Soundrio\\" },
+    { "id": "virtual_mic", "type": "output",  "device": "CABLE Input" }
+  ],
+  "links": [
+    { "from": "mic",      "to": "denoise" },
+    { "from": "denoise",  "to": "virtual_mic" },
+    { "from": "soundrio", "to": "virtual_mic", "gain_db": 0 }
+  ]
+}
