@@ -1,7 +1,7 @@
 #pragma once
 
 #include "com.h"
-#include "effect.h"
+#include "source_buffer.h"
 #include "source_reader.h"
 #include "stream_clock.h"
 
@@ -12,51 +12,23 @@
 #include <mutex>
 #include <string>
 #include <thread>
-#include <vector>
 
 namespace wolfe {
 
-// A connection between two nodes. The gain may be changed while audio runs.
-struct Link {
-    std::string from, to;
-    std::atomic<float> gain{1.0f};
-};
-
-// What one output has to compute every cycle: its part of the graph, flattened
-// into steps ordered so that each step only depends on earlier ones.
-struct Plan {
-    struct Feed {
-        int step;                    // index of the step this audio comes from
-        std::shared_ptr<Link> link;
-        float appliedGain;           // gain used at the end of the previous cycle
-    };
-    struct Step {
-        std::string nodeId;
-        std::shared_ptr<SourceReader> reader;  // set when the node is an input...
-        std::shared_ptr<Effect> effect;        // ...otherwise this is, with `feeds`
-        std::vector<Feed> feeds;
-        std::vector<float> audio;              // this step's result for the current cycle
-    };
-    std::vector<Step> steps;
-    std::vector<Feed> outputFeeds;  // what is summed into the device
-};
-
-// Plays the result of the graph on a playback device, on its own thread.
+// Plays what the graph made for it on a playback device, on its own thread.
 //
-// The device sets the pace: every time it has taken audio, one graph cycle is
-// run for each quantum it took. A small queue of audio is kept in the device
-// so that it never runs dry between two refills; how much is needed depends on
-// how regularly the device asks, and is found out while running.
+// The graph runs on its own clock and leaves its result in `feed`; the device
+// runs on another. A reader takes the audio across, resampling it to the
+// device's pace. A small queue of audio is kept in the device so that it never
+// runs dry between two refills; how much is needed depends on how regularly
+// the device asks, and is found out while running.
 class Output {
 public:
-    explicit Output(std::string device);
+    Output(std::string device, std::shared_ptr<SourceBuffer> feed, double marginSeconds);
     ~Output();
 
     void start();
     void stop();
-
-    void setPlan(std::shared_ptr<Plan> plan);
-    std::shared_ptr<Plan> plan() const;
 
     std::string status() const;
     float takePeak() { return peak_.exchange(0.0f, std::memory_order_relaxed); }
@@ -68,6 +40,8 @@ public:
         double longestWaitMs = 0;  // longest pause between two requests from the device
     };
     Stats takeStats();
+    // How the graph's audio reaches the device.
+    SourceReader::Stats takeFeedStats() { return reader_->takeStats(); }
 
 private:
     void threadMain();
@@ -78,6 +52,7 @@ private:
     void setStatus(const std::string& text);
 
     std::string device_;
+    std::shared_ptr<SourceReader> reader_;
 
     std::thread thread_;
     HANDLE stopEvent_ = nullptr;
@@ -91,9 +66,6 @@ private:
     StreamClock clock_;      // device time vs. frames the device has played
     int64_t submitted_ = 0;  // frames handed to the device
     int64_t madeUp_ = 0;     // frames of silence the device played on its own when it ran dry
-
-    mutable std::mutex planMutex_;
-    std::shared_ptr<Plan> plan_;
 
     std::atomic<uint64_t> underruns_{0};
     std::atomic<int> statTargetFill_{0};

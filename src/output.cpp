@@ -30,31 +30,10 @@ constexpr double kShrinkSeconds = 60.0;
 constexpr double kQuantumSeconds = (double)kQuantum / kSampleRate;
 constexpr size_t kQuantumSamples = (size_t)kQuantum * kChannels;
 
-// Adds every feed, scaled by its link's gain, into `out`. A gain that changed
-// since the previous cycle is faded over the cycle to avoid a click.
-void mixFeeds(Plan& plan, std::vector<Plan::Feed>& feeds, float* out) {
-    for (Plan::Feed& feed : feeds) {
-        const float* in = plan.steps[feed.step].audio.data();
-        const float wanted = feed.link->gain.load(std::memory_order_relaxed);
-        if (wanted == feed.appliedGain) {
-            if (wanted == 0.0f) continue;
-            for (size_t i = 0; i < kQuantumSamples; i++) out[i] += in[i] * wanted;
-        } else {
-            float gain = feed.appliedGain;
-            const float step = (wanted - gain) / kQuantum;
-            for (int frame = 0; frame < kQuantum; frame++) {
-                gain += step;
-                out[frame * 2] += in[frame * 2] * gain;
-                out[frame * 2 + 1] += in[frame * 2 + 1] * gain;
-            }
-            feed.appliedGain = wanted;
-        }
-    }
-}
-
 }  // namespace
 
-Output::Output(std::string device) : device_(std::move(device)) {}
+Output::Output(std::string device, std::shared_ptr<SourceBuffer> feed, double marginSeconds)
+    : device_(std::move(device)), reader_(std::make_shared<SourceReader>(std::move(feed), marginSeconds)) {}
 
 Output::~Output() { stop(); }
 
@@ -72,16 +51,6 @@ void Output::stop() {
     CloseHandle(stopEvent_);
     CloseHandle(dataEvent_);
     stopEvent_ = dataEvent_ = nullptr;
-}
-
-void Output::setPlan(std::shared_ptr<Plan> plan) {
-    std::lock_guard<std::mutex> lock(planMutex_);
-    plan_.swap(plan);
-}
-
-std::shared_ptr<Plan> Output::plan() const {
-    std::lock_guard<std::mutex> lock(planMutex_);
-    return plan_;
 }
 
 std::string Output::status() const {
@@ -260,23 +229,7 @@ Output::Stats Output::takeStats() {
 }
 
 void Output::runCycle(double cycleTime, float* stereo) {
-    std::memset(stereo, 0, kQuantumSamples * sizeof(float));
-
-    std::lock_guard<std::mutex> lock(planMutex_);
-    if (!plan_) return;
-    const double now = nowSeconds();
-
-    for (Plan::Step& step : plan_->steps) {
-        float* audio = step.audio.data();
-        if (step.reader) {
-            step.reader->read(cycleTime, now, audio);
-        } else {
-            std::memset(audio, 0, kQuantumSamples * sizeof(float));
-            mixFeeds(*plan_, step.feeds, audio);
-            step.effect->process(audio);
-        }
-    }
-    mixFeeds(*plan_, plan_->outputFeeds, stereo);
+    reader_->read(cycleTime, nowSeconds(), stereo);
 
     float peak = 0.0f;
     for (size_t i = 0; i < kQuantumSamples; i++) peak = std::max(peak, std::fabs(stereo[i]));

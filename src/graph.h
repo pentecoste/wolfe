@@ -1,14 +1,50 @@
 #pragma once
 
+#include "effect.h"
 #include "input.h"
 #include "output.h"
 
+#include <atomic>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace wolfe {
+
+// A connection between two nodes. The gain may be changed while audio runs.
+struct Link {
+    std::string from, to;
+    std::atomic<float> gain{1.0f};
+};
+
+// What the graph computes every cycle, flattened into steps ordered so that
+// each step only depends on earlier ones. Every node that leads to an output
+// is one step, computed once per cycle whatever the number of outputs it feeds.
+struct Plan {
+    struct Feed {
+        int step;                    // index of the step this audio comes from
+        std::shared_ptr<Link> link;
+        float appliedGain;           // gain used at the end of the previous cycle
+    };
+    struct Step {
+        std::string nodeId;
+        std::shared_ptr<SourceReader> reader;  // set when the node is an input...
+        std::shared_ptr<Effect> effect;        // ...otherwise this is, with `feeds`
+        std::vector<Feed> feeds;
+        std::vector<float> audio;              // this step's result for the current cycle
+    };
+    struct Sink {
+        std::string nodeId;
+        std::shared_ptr<SourceBuffer> feed;  // where its result goes, for the device to play
+        std::vector<Feed> feeds;
+        std::vector<int> inputs;             // the input steps that reach it, for reports
+    };
+    std::vector<Step> steps;
+    std::vector<Sink> sinks;
+};
 
 // The whole patchbay: inputs, effects and outputs, and the links between them.
 //
@@ -16,6 +52,10 @@ namespace wolfe {
 // functions throw std::runtime_error on a mistake (duplicate id, unknown node,
 // a link that makes a loop...). Links may be added and removed while audio is
 // running.
+//
+// The graph runs on a clock of its own, the performance counter: every 10 ms
+// one cycle computes the next 10 ms of every node. Devices run on their own
+// clocks; readers resample between the two at every edge.
 class Graph {
 public:
     Graph();
@@ -34,7 +74,7 @@ public:
     void setLinkGain(const std::string& from, const std::string& to, float gain);
 
     // Extra age given to the audio on top of the minimum, to absorb timing
-    // irregularities. More is safer, less is faster. Applies to links made later.
+    // irregularities. More is safer, less is faster. Applies to nodes added later.
     void setMarginMs(double milliseconds) { marginSeconds_ = milliseconds / 1000.0; }
 
     void start();
@@ -52,29 +92,49 @@ public:
     // Queue and underruns of an output, and how each source reaches it.
     struct OutputReport {
         Output::Stats output;
+        SourceReader::Stats feed;  // from the graph to the device
         struct Source {
             std::string id;
-            SourceReader::Stats stats;
+            SourceReader::Stats stats;  // from the source to the graph
         };
         std::vector<Source> sources;
     };
     OutputReport outputReport(const std::string& id);
 
+    // Cycles the graph could not run in time and skipped, since the start.
+    uint64_t skippedCycles() const { return skipped_.load(std::memory_order_relaxed); }
+
 private:
     enum class Kind { None, Input, Effect, Output };
+    struct OutputNode {
+        std::shared_ptr<SourceBuffer> feed;
+        std::unique_ptr<Output> output;
+    };
+
     Kind kindOf(const std::string& id) const;
     void requireNewId(const std::string& id) const;
     std::shared_ptr<Link> findLink(const std::string& from, const std::string& to) const;
-    std::shared_ptr<Plan> buildPlan(const std::string& outputId, const Plan* previous) const;
-    void rebuildPlans();
+    std::shared_ptr<Plan> buildPlan(const Plan* previous) const;
+    void rebuildPlan();
+    std::shared_ptr<Plan> plan() const;
+
+    void cycleMain();
+    void runCycle(Plan& plan, double cycleTime, double endTime);
 
     std::map<std::string, std::unique_ptr<Input>> inputs_;
     std::map<std::string, std::string> effects_;  // id -> type
-    std::map<std::string, std::unique_ptr<Output>> outputs_;
+    std::map<std::string, OutputNode> outputs_;
     std::vector<std::shared_ptr<Link>> links_;
 
     double marginSeconds_ = 0.004;
     bool running_ = false;
+
+    mutable std::mutex planMutex_;  // held by the cycle while it runs
+    std::shared_ptr<Plan> plan_;
+
+    std::thread cycleThread_;
+    HANDLE stopEvent_ = nullptr;
+    std::atomic<uint64_t> skipped_{0};
 };
 
 }  // namespace wolfe
