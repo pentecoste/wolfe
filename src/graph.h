@@ -1,6 +1,7 @@
 #pragma once
 
 #include "effect.h"
+#include "graph_clock.h"
 #include "input.h"
 #include "output.h"
 #include "virtual_devices.h"
@@ -56,10 +57,13 @@ struct Plan {
 // a link that makes a loop...). Links may be added and removed while audio is
 // running.
 //
-// The graph runs on a clock of its own, the performance counter: every 10 ms
-// one cycle computes the next 10 ms of every node. Devices run on their own
-// clocks; readers resample between the two at every edge.
-class Graph {
+// Every cycle computes the next 10 ms of every node. One playback device leads
+// the graph: it has each cycle computed when it needs audio and plays the
+// result as it is. While none does (none is linked, or the one that led stopped
+// asking), a timer keeps the pace instead. Wolfe's own devices follow the
+// graph's clock (see GraphClock); every other device runs on its own, and a
+// reader resamples between the two at the edge.
+class Graph : public Pacer {
 public:
     Graph();
     ~Graph();
@@ -110,6 +114,11 @@ public:
 
     // Cycles the graph could not run in time and skipped, since the start.
     uint64_t skippedCycles() const { return skipped_.load(std::memory_order_relaxed); }
+    // The id of the output that leads the graph; empty while the timer does.
+    std::string leader() const;
+
+    // Pacer
+    bool lead(const Output* output, double deviceOffset, int targetFill, int64_t accounted, float* stereo) override;
 
 private:
     enum class Kind { None, Input, Effect, Output };
@@ -126,7 +135,8 @@ private:
     std::shared_ptr<Plan> plan() const;
 
     void cycleMain();
-    void runCycle(Plan& plan, int64_t cycle);
+    // `leaderOut`: where the leading output's share goes, if one leads.
+    void runCycle(Plan& plan, int64_t cycle, const std::string& leaderId, float* leaderOut);
 
     std::map<std::string, std::unique_ptr<Input>> inputs_;
     std::map<std::string, std::string> effects_;  // id -> type
@@ -138,8 +148,14 @@ private:
     double marginSeconds_ = 0.004;
     bool running_ = false;
 
-    mutable std::mutex planMutex_;  // held by the cycle while it runs
+    mutable std::mutex planMutex_;  // held by the cycle while it runs; also guards what follows
     std::shared_ptr<Plan> plan_;
+    int64_t nextCycle_ = 0;            // the cycle to compute next
+    const Output* leader_ = nullptr;   // the output leading the graph, if any
+    std::string leaderId_;
+    std::map<const Output*, std::string> outputIds_;  // for lead(), from the outputs' threads
+    double lastLead_ = 0;              // when it last had a cycle computed
+    std::shared_ptr<GraphClock> clock_ = std::make_shared<GraphClock>();
 
     std::thread cycleThread_;
     HANDLE stopEvent_ = nullptr;

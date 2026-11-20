@@ -45,6 +45,24 @@ constexpr int kFrameBytes = 8;
 constexpr int kMaxPacket = (kFramesPerPacket + 1) * kFrameBytes;
 constexpr int kClockId = 0x10;
 
+// Following the graph's clock: a stream further than this from where it should
+// be jumps there; closer, its rate is bent by up to kMaxBend, enough to take
+// out an error in about kCorrectSeconds.
+constexpr double kJumpFrames = kQuantum;
+constexpr double kMaxBend = 0.002;
+constexpr double kCorrectSeconds = 0.5;
+
+double bend(double error) { return std::clamp(-error / (kCorrectSeconds * kSampleRate), -kMaxBend, kMaxBend); }
+
+// A speaker's samples go this far ahead of the graph's clock, a microphone
+// reads this far behind what the graph is sure to have computed: room for a
+// request, or a cycle, to be a little late.
+constexpr double kSpeakerAheadFrames = kSampleRate * 0.002;
+// How fast the estimate of a speaker's lead rises back when requests come in
+// earlier again (per request; it drops at once).
+constexpr double kLeadRise = 0.002;
+constexpr double kMicrophoneBehindFrames = kSampleRate * 0.003;
+
 constexpr uint32_t kSpeedHigh = 3;  // in USB/IP's numbering
 constexpr int32_t kEPIPE = -32, kECONNRESET = -104;
 
@@ -185,7 +203,7 @@ struct Urb {
     uint32_t seqnum;
     Role role;
     std::vector<IsoPacket> packets;
-    int64_t firstFrame;   // recording: the graph frame of its first sample
+    double start;         // when its first packet is due
     uint32_t startFrame;  // what the reply says: the millisecond it started in
     double due;           // when it is complete
 };
@@ -194,6 +212,8 @@ struct Urb {
 struct Stream {
     double end = 0;      // when what is scheduled ends; 0: not running
     int64_t cursor = 0;  // the graph frame where the next packet's samples go
+    bool placed = false; // recording: the cursor has been put in its place
+    double carry = 0;    // recording: the fraction of a frame owed to the next packet
 };
 
 }  // namespace
@@ -321,7 +341,8 @@ private:
     void setStreaming(bool on) {
         std::lock_guard<std::mutex> lock(mutex_);
         alternate_ = on;
-        data_.end = feedback_.end = 0;
+        data_ = Stream();
+        feedback_ = Stream();
         device_->streaming = on;
     }
 
@@ -352,24 +373,40 @@ private:
             }
         }
 
-        int64_t cursor;
+        int64_t cursor = 0;
         {
             std::lock_guard<std::mutex> lock(mutex_);
             // After what is already scheduled on this endpoint; from now if the
             // stream had stopped or fallen behind.
+            bool restarted = false;
             if (s.end < now) {
                 if (s.end > 0) device_->restarts++;
                 s.end = now;
-                s.cursor = std::llround(now * kSampleRate);
+                restarted = true;
             }
             const double start = s.end;
             s.end += count * period;
             urb->due = s.end;
+            urb->start = start;
             urb->startFrame = (uint32_t)std::llround(start * 1000.0);
-            urb->firstFrame = s.cursor;
-            cursor = s.cursor;
-            if (role == Role::Data) {
-                s.cursor += playback() ? (int64_t)(samples.size() / 2) : (int64_t)count * kFramesPerPacket;
+            if (role == Role::Data && playback()) {
+                // Windows sends each request some time before it is due. The
+                // samples go where the graph's clock is when the request is
+                // due, less the least of that time: as early as they can be
+                // and still be ahead of the graph. Going by when requests are
+                // due keeps the target smooth; the feedback then keeps the
+                // samples coming at the graph's pace.
+                const double lead = start - now;
+                if (restarted || lead < speakerLead_) speakerLead_ = lead;
+                else speakerLead_ += (lead - speakerLead_) * kLeadRise;
+                const double wanted = device_->clock->frameAt(start - speakerLead_) + kSpeakerAheadFrames;
+                if (restarted || std::fabs((double)s.cursor - wanted) > kJumpFrames) {
+                    if (!restarted) device_->jumps++;
+                    s.cursor = std::llround(wanted);
+                }
+                speakerError_ = (double)s.cursor - wanted;
+                cursor = s.cursor;
+                s.cursor += (int64_t)(samples.size() / 2);
             }
             pending_.push_back(std::move(urb));
         }
@@ -438,21 +475,39 @@ private:
         std::vector<uint8_t> data;
         std::vector<uint32_t> actual(urb.packets.size());
         if (urb.role == Role::Data && !playback()) {
-            float frames[kFramesPerPacket * 2];
+            // Each packet carries the frames the graph has made since the
+            // previous one: 6 on average, one more or one less now and then to
+            // stay with the graph's clock (the host follows the amount).
+            float frames[(kFramesPerPacket + 1) * 2];
+            std::lock_guard<std::mutex> lock(mutex_);  // data_ is shared with the receiving thread
+            Stream& s = data_;
             for (size_t i = 0; i < urb.packets.size(); i++) {
-                const int64_t first = urb.firstFrame + (int64_t)i * kFramesPerPacket - device_->readBehindFrames;
-                device_->missingFrames += device_->timeline->read(first, kFramesPerPacket, frames);
-                actual[i] = std::min<uint32_t>(urb.packets[i].length, kFramesPerPacket * kFrameBytes);
-                for (uint32_t b = 0; b + 4 <= actual[i]; b += 4) {
-                    const float sample = std::clamp(frames[b / 4], -1.0f, 1.0f);
+                const double wanted = device_->clock->frameAt(urb.start + (double)i * kPacketSeconds) -
+                                      device_->clock->slackFrames() - kMicrophoneBehindFrames;
+                if (!s.placed || std::fabs((double)s.cursor - wanted) > kJumpFrames) {
+                    if (s.placed) device_->jumps++;
+                    s.cursor = std::llround(wanted);
+                    s.carry = 0;
+                    s.placed = true;
+                }
+                s.carry += kFramesPerPacket * (1.0 + bend((double)s.cursor - wanted));
+                const int room = (int)(urb.packets[i].length / kFrameBytes);
+                const int count = std::clamp((int)std::floor(s.carry), 0, std::min(room, kFramesPerPacket + 1));
+                s.carry -= count;
+                device_->missingFrames += device_->timeline->read(s.cursor, count, frames);
+                s.cursor += count;
+                actual[i] = (uint32_t)(count * kFrameBytes);
+                for (int b = 0; b < count * 2; b++) {
+                    const float sample = std::clamp(frames[b], -1.0f, 1.0f);
                     const int32_t value = (int32_t)std::lround((double)sample * 2147483647.0);
                     add(data, {value & 0xFF, (value >> 8) & 0xFF, (value >> 16) & 0xFF, (value >> 24) & 0xFF});
                 }
             }
         } else if (urb.role == Role::Feedback) {
-            // Frames per packet period, 16.16 fixed point: exactly 6, the
-            // device's clock being the graph's.
-            const uint32_t value = (uint32_t)kFramesPerPacket << 16;
+            // Frames per packet period, 16.16 fixed point: 6, bent a little
+            // when the speaker's samples drift away from the graph's clock.
+            const uint32_t value =
+                (uint32_t)std::llround(kFramesPerPacket * (1.0 + bend(speakerError_.load())) * 65536.0);
             for (size_t i = 0; i < urb.packets.size(); i++) {
                 actual[i] = std::min<uint32_t>(urb.packets[i].length, 4);
                 const uint8_t bytes[4] = {(uint8_t)value, (uint8_t)(value >> 8), (uint8_t)(value >> 16), (uint8_t)(value >> 24)};
@@ -508,6 +563,8 @@ private:
     std::mutex mutex_;  // the pending requests and the streams
     std::vector<std::unique_ptr<Urb>> pending_;
     Stream data_, feedback_;
+    std::atomic<double> speakerError_{0};  // frames the speaker's samples are ahead of the graph's clock
+    double speakerLead_ = 0;               // least time ahead of their due time that requests come in, lately
     bool alternate_ = false;
     uint8_t configuration_ = 0;
 

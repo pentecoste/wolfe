@@ -32,8 +32,10 @@ constexpr size_t kQuantumSamples = (size_t)kQuantum * kChannels;
 
 }  // namespace
 
-Output::Output(std::string device, std::shared_ptr<SourceBuffer> feed, double marginSeconds)
-    : device_(std::move(device)), reader_(std::make_shared<SourceReader>(std::move(feed), marginSeconds)) {}
+Output::Output(std::string device, std::shared_ptr<SourceBuffer> feed, double marginSeconds, Pacer* pacer)
+    : device_(std::move(device)),
+      reader_(std::make_shared<SourceReader>(std::move(feed), marginSeconds)),
+      pacer_(pacer) {}
 
 Output::~Output() { stop(); }
 
@@ -201,7 +203,12 @@ void Output::run() {
         // for moments that have already passed.
         const double smoothNow = clock_.timeOf((double)played);
         for (int i = 0; i < quanta; i++) {
-            runCycle(smoothNow - (quanta - 1 - i) * kQuantumSeconds, cycle);
+            if (!pacer_ || !pacer_->lead(this, clock_.offset(), targetFill_, submitted_ + madeUp_, cycle)) {
+                reader_->read(smoothNow - (quanta - 1 - i) * kQuantumSeconds, nowSeconds(), cycle);
+            }
+            float peak = 0.0f;
+            for (size_t s = 0; s < kQuantumSamples; s++) peak = std::max(peak, std::fabs(cycle[s]));
+            if (peak > peak_.load(std::memory_order_relaxed)) peak_.store(peak, std::memory_order_relaxed);
             BYTE* data = nullptr;
             check(render_->GetBuffer(kQuantum, &data), "get playback buffer");
             std::memcpy(data, cycle, sizeof(cycle));
@@ -226,14 +233,6 @@ Output::Stats Output::takeStats() {
     stats.lowestMs = lowest == (1 << 30) ? 0.0 : lowest * msPerFrame;
     stats.longestWaitMs = statLongestWait_.exchange(0.0, std::memory_order_relaxed) * 1000.0;
     return stats;
-}
-
-void Output::runCycle(double cycleTime, float* stereo) {
-    reader_->read(cycleTime, nowSeconds(), stereo);
-
-    float peak = 0.0f;
-    for (size_t i = 0; i < kQuantumSamples; i++) peak = std::max(peak, std::fabs(stereo[i]));
-    if (peak > peak_.load(std::memory_order_relaxed)) peak_.store(peak, std::memory_order_relaxed);
 }
 
 }  // namespace wolfe

@@ -19,10 +19,6 @@ namespace wolfe {
 
 namespace {
 
-// How far behind the present a microphone reads the graph's audio: one cycle
-// of the graph, which writes a cycle's worth at once when it is over, and
-// room for that cycle to be a little late.
-constexpr int64_t kRecordingBehindFrames = kQuantum + kSampleRate * 3 / 1000;
 // After asking usbip-win2 to attach a device, how long it may take to connect.
 constexpr double kConnectSeconds = 3.0;
 constexpr double kRetrySeconds = 5.0;
@@ -88,19 +84,26 @@ std::string firstLine(std::string text) {
 
 class Device : public VirtualDevice {
 public:
-    Device(const VirtualDeviceSpec& spec, std::string busId) : spec_(spec), usb_(std::make_shared<UsbIpDevice>()) {
+    Device(const VirtualDeviceSpec& spec, std::string busId, std::shared_ptr<const GraphClock> clock)
+        : spec_(spec), usb_(std::make_shared<UsbIpDevice>()) {
         usb_->busId = std::move(busId);
+        usb_->clock = std::move(clock);
         usb_->direction = spec.recording ? UsbIpDevice::Direction::Recording : UsbIpDevice::Direction::Playback;
         usb_->name = spec.name;
         usb_->serial = spec.serial;
         usb_->timeline = std::make_shared<FrameTimeline>();
-        usb_->readBehindFrames = spec.recording ? kRecordingBehindFrames : 0;
     }
 
     const VirtualDeviceSpec& spec() const override { return spec_; }
     const std::shared_ptr<FrameTimeline>& timeline() const override { return usb_->timeline; }
-    int64_t readBehindFrames() const override { return usb_->readBehindFrames; }
     bool streaming() const override { return usb_->connected && usb_->streaming; }
+
+    std::string takeTiming() override {
+        char text[160];
+        snprintf(text, sizeof(text), "restarts %ld  jumps %ld  missing %ld  late max %.1f ms", usb_->restarts.exchange(0),
+                 usb_->jumps.exchange(0), usb_->missingFrames.exchange(0), usb_->lateMaxUs.exchange(0) / 1000.0);
+        return text;
+    }
 
     std::string status() const override {
         if (usb_->connected) {
@@ -135,6 +138,7 @@ private:
 }  // namespace
 
 struct VirtualDevices::Impl {
+    std::shared_ptr<const GraphClock> clock;
     int port;
     UsbIpServer server;
     std::string serverProblem;  // why the server could not start; empty when running
@@ -232,7 +236,8 @@ struct VirtualDevices::Impl {
     }
 };
 
-VirtualDevices::VirtualDevices(int port) : impl_(std::make_unique<Impl>()) {
+VirtualDevices::VirtualDevices(std::shared_ptr<const GraphClock> clock, int port) : impl_(std::make_unique<Impl>()) {
+    impl_->clock = std::move(clock);
     impl_->port = port;
     if (!impl_->server.start(port, &impl_->serverProblem)) logLine("Wolfe's devices: %s", impl_->serverProblem.c_str());
     impl_->keeper = std::thread([this] { impl_->keeperMain(); });
@@ -250,7 +255,7 @@ VirtualDevices::~VirtualDevices() {
 
 std::shared_ptr<VirtualDevice> VirtualDevices::add(const VirtualDeviceSpec& spec) {
     std::lock_guard<std::mutex> lock(impl_->mutex);
-    auto device = std::make_shared<Device>(spec, impl_->freeBusId());
+    auto device = std::make_shared<Device>(spec, impl_->freeBusId(), impl_->clock);
     impl_->server.add(device->usb());
     impl_->devices.push_back(device);
     impl_->wake.notify_all();

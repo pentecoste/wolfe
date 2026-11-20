@@ -1,6 +1,7 @@
 #pragma once
 
 #include "frame_timeline.h"
+#include "graph_clock.h"
 
 #include <atomic>
 #include <memory>
@@ -23,14 +24,14 @@ struct UsbIpDevice {
     std::string name;    // what Windows calls the device
     std::string serial;  // its identity for Windows (see usbip_server.cpp)
     std::shared_ptr<FrameTimeline> timeline;
-    // Recording: how far behind the present the microphone reads the timeline,
-    // which gives the graph time to have written it.
-    int64_t readBehindFrames = 0;
+    // The pace the device keeps: the graph's.
+    std::shared_ptr<const GraphClock> clock;
 
     // Kept up to date by the server.
     std::atomic<bool> connected{false};  // usbip-win2 has it, Windows sees it
     std::atomic<bool> streaming{false};  // an application is playing or recording on it
     std::atomic<long> restarts{0};       // times the stream stopped and started again
+    std::atomic<long> jumps{0};          // times it was too far from the graph's clock and jumped to it
     std::atomic<long> missingFrames{0};  // recording: frames the graph had not written in time
     std::atomic<long> lateMaxUs{0};      // worst lateness of a request's completion since the last look
 };

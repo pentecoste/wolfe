@@ -23,6 +23,8 @@ constexpr size_t kQuantumSamples = (size_t)kQuantum * kChannels;
 constexpr double kResyncSeconds = 0.2;
 // How far behind the present the graph reads Wolfe's own speakers.
 constexpr int64_t kSpeakerBehindFrames = kSampleRate * 2 / 1000;
+// An output that has not had a cycle computed for this long no longer leads.
+constexpr double kLeaderTimeout = 0.1;
 
 // Adds every feed, scaled by its link's gain, into `out`. A gain that changed
 // since the previous cycle is faded over the cycle to avoid a click.
@@ -85,7 +87,11 @@ void Graph::addOutput(const std::string& id, const std::string& device) {
     // The graph delivers exactly one quantum per cycle.
     node.feed = std::make_shared<SourceBuffer>();
     node.feed->setPacketFrames(kQuantum);
-    node.output = std::make_unique<Output>(device, node.feed, marginSeconds_);
+    node.output = std::make_unique<Output>(device, node.feed, marginSeconds_, this);
+    {
+        std::lock_guard<std::mutex> lock(planMutex_);
+        outputIds_[node.output.get()] = id;
+    }
     if (running_) node.output->start();
     outputs_[id] = std::move(node);
 }
@@ -93,7 +99,7 @@ void Graph::addOutput(const std::string& id, const std::string& device) {
 void Graph::addVirtualDevice(const std::string& id, const VirtualDeviceSpec& spec) {
     requireNewId(id);
     if (spec.name.empty() || spec.serial.empty()) throw std::runtime_error("\"" + id + "\" needs a name and a serial");
-    if (!virtualDevices_) virtualDevices_ = std::make_unique<VirtualDevices>();
+    if (!virtualDevices_) virtualDevices_ = std::make_unique<VirtualDevices>(clock_);
     virtuals_[id] = virtualDevices_->add(spec);
 }
 
@@ -114,6 +120,12 @@ void Graph::removeNode(const std::string& id) {
     if (auto found = outputs_.find(id); found != outputs_.end()) {
         output = std::move(found->second);
         outputs_.erase(found);
+        std::lock_guard<std::mutex> lock(planMutex_);
+        outputIds_.erase(output.output.get());
+        if (leader_ == output.output.get()) {
+            leader_ = nullptr;  // the timer takes over until another output asks
+            leaderId_.clear();
+        }
     }
     effects_.erase(id);
     std::shared_ptr<VirtualDevice> device;
@@ -321,6 +333,10 @@ std::shared_ptr<Plan> Graph::plan() const {
 void Graph::start() {
     if (running_) return;
     rebuildPlan();
+    {
+        std::lock_guard<std::mutex> lock(planMutex_);
+        nextCycle_ = (int64_t)std::floor(clock_->frameAt(nowSeconds()) / kQuantum);
+    }
     for (auto& [id, input] : inputs_) input->start();
     for (auto& [id, output] : outputs_) output.output->start();
     stopEvent_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
@@ -339,44 +355,92 @@ void Graph::stop() {
     running_ = false;
 }
 
-// Cycle n computes the graph's frames [n, n + 1) quanta on the performance
-// counter, and runs when they are all in the past.
+// While no output leads, the timer does: cycle n runs once the graph's clock
+// has reached its end. The clock then simply follows the performance counter
+// from where the last leader left it.
 void Graph::cycleMain() {
     AudioThreadPriority priority;
     HANDLE timer = CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
     if (!timer) timer = CreateWaitableTimerW(nullptr, FALSE, nullptr);
     HANDLE handles[2] = {stopEvent_, timer};
 
-    int64_t cycle = (int64_t)std::floor(nowSeconds() / kQuantumSeconds);
     for (;;) {
-        const double end = (double)(cycle + 1) * kQuantumSeconds;
-        double now = nowSeconds();
-        if (now < end) {
-            LARGE_INTEGER due;
-            due.QuadPart = -std::max<LONGLONG>(1, (LONGLONG)((end - now) * 1e7));
-            SetWaitableTimer(timer, &due, 0, nullptr, nullptr, FALSE);
-            if (WaitForMultipleObjects(2, handles, FALSE, INFINITE) == WAIT_OBJECT_0) break;
-            continue;
-        }
-        if (WaitForSingleObject(stopEvent_, 0) == WAIT_OBJECT_0) break;
-        if (now - end > kResyncSeconds) {
-            const int64_t present = (int64_t)std::floor(now / kQuantumSeconds) - 1;
-            skipped_.fetch_add((uint64_t)(present - cycle), std::memory_order_relaxed);
-            cycle = present;
-            continue;
-        }
+        double wait = kQuantumSeconds;
         {
             std::lock_guard<std::mutex> lock(planMutex_);
-            if (plan_) runCycle(*plan_, cycle);
+            const double now = nowSeconds();
+            if (leader_ && now - lastLead_ >= kLeaderTimeout) {
+                logLine("graph: \"%s\" stopped asking for audio, a timer keeps the time", leaderId_.c_str());
+                leader_ = nullptr;
+                leaderId_.clear();
+            }
+            // The timer runs a cycle as soon as the clock reaches its end.
+            if (!leader_) clock_->setSlackFrames(kQuantum);
+            if (!leader_) {
+                const double end = clock_->timeOf((double)(nextCycle_ + 1) * kQuantum);
+                if (now - end > kResyncSeconds) {
+                    const int64_t present = (int64_t)std::floor(clock_->frameAt(now) / kQuantum) - 1;
+                    skipped_.fetch_add((uint64_t)std::max<int64_t>(0, present - nextCycle_), std::memory_order_relaxed);
+                    nextCycle_ = present;
+                    wait = 0;
+                } else if (now >= end) {
+                    if (plan_) runCycle(*plan_, nextCycle_, {}, nullptr);
+                    nextCycle_++;
+                    wait = 0;
+                } else {
+                    wait = end - now;
+                }
+            }
         }
-        cycle++;
+        if (wait <= 0) {
+            if (WaitForSingleObject(stopEvent_, 0) == WAIT_OBJECT_0) break;
+            continue;
+        }
+        LARGE_INTEGER due;
+        due.QuadPart = -std::max<LONGLONG>(1, (LONGLONG)(std::min(wait, kQuantumSeconds) * 1e7));
+        SetWaitableTimer(timer, &due, 0, nullptr, nullptr, FALSE);
+        if (WaitForMultipleObjects(2, handles, FALSE, INFINITE) == WAIT_OBJECT_0) break;
     }
     CloseHandle(timer);
 }
 
-void Graph::runCycle(Plan& plan, int64_t cycle) {
+bool Graph::lead(const Output* output, double deviceOffset, int targetFill, int64_t accounted, float* stereo) {
+    std::lock_guard<std::mutex> lock(planMutex_);
+    const double now = nowSeconds();
+    if (output != leader_) {
+        // Only when nobody else leads: changing hands for nothing would be heard.
+        if (leader_ && now - lastLead_ < kLeaderTimeout) return false;
+        auto found = outputIds_.find(output);
+        if (found == outputIds_.end()) return false;
+        leader_ = output;
+        leaderId_ = found->second;
+        logLine("graph: \"%s\" keeps the time", leaderId_.c_str());
+    }
+    lastLead_ = now;
+
+    // Once this cycle is queued, the device has targetFill frames to play
+    // before reaching its end: the graph is that far, and this cycle, ahead
+    // of what the device is playing.
+    const double frontier = (double)nextCycle_ * kQuantum;
+    clock_->setOffset(deviceOffset - ((double)targetFill + kQuantum + frontier - (double)accounted) / kSampleRate);
+    // Between two refills the device plays about one cycle's worth, and is
+    // then given one: the clock is up to two cycles ahead of what is computed.
+    clock_->setSlackFrames(2.0 * kQuantum);
+    std::memset(stereo, 0, kQuantumSamples * sizeof(float));
+    if (plan_) runCycle(*plan_, nextCycle_, leaderId_, stereo);
+    nextCycle_++;
+    return true;
+}
+
+std::string Graph::leader() const {
+    std::lock_guard<std::mutex> lock(planMutex_);
+    return leaderId_;
+}
+
+void Graph::runCycle(Plan& plan, int64_t cycle, const std::string& leaderId, float* leaderOut) {
     const int64_t firstFrame = cycle * kQuantum;
-    const double endTime = (double)(cycle + 1) * kQuantumSeconds;
+    // When the graph's clock reaches the end of this cycle.
+    const double endTime = clock_->timeOf((double)(cycle + 1) * kQuantum);
     const double now = nowSeconds();
     for (Plan::Step& step : plan.steps) {
         float* audio = step.audio.data();
@@ -395,14 +459,14 @@ void Graph::runCycle(Plan& plan, int64_t cycle) {
     }
     float out[kQuantumSamples];
     for (Plan::Sink& sink : plan.sinks) {
+        if (leaderOut && sink.nodeId == leaderId) {
+            mixFeeds(plan, sink.feeds, leaderOut);  // played as it is
+            continue;
+        }
         std::memset(out, 0, sizeof(out));
         mixFeeds(plan, sink.feeds, out);
-        if (sink.device) {
-            sink.device->timeline()->write(firstFrame, out, kQuantum);
-        } else {
-            // On the graph's clock these frames end exactly now.
-            sink.feed->push(endTime, out, kQuantum);
-        }
+        if (sink.device) sink.device->timeline()->write(firstFrame, out, kQuantum);
+        else sink.feed->push(endTime, out, kQuantum);
     }
 }
 
@@ -418,9 +482,10 @@ std::string Graph::report() {
     }
     for (auto& [id, device] : virtuals_) {
         float peak = device->timeline()->takePeak();
-        snprintf(line, sizeof(line), "  %s %-12s Wolfe's %s \"%s\": %s  peak %6.1f dB\n",
+        snprintf(line, sizeof(line), "  %s %-12s Wolfe's %s \"%s\": %s  peak %6.1f dB\n        %s\n",
                  device->spec().recording ? "out" : "in ", id.c_str(), device->spec().recording ? "microphone" : "speaker",
-                 device->spec().name.c_str(), device->status().c_str(), peak > 0 ? 20.0 * log10(peak) : -120.0);
+                 device->spec().name.c_str(), device->status().c_str(), peak > 0 ? 20.0 * log10(peak) : -120.0,
+                 device->takeTiming().c_str());
         text += line;
     }
     auto readerLine = [&](const std::string& name, const SourceReader::Stats& stats) {
@@ -454,6 +519,8 @@ std::string Graph::report() {
         text += line;
         readerLine("from graph", node.output->takeFeedStats());
     }
+    const std::string leading = leader();
+    text += leading.empty() ? "  the graph keeps time by a timer\n" : "  \"" + leading + "\" keeps the graph's time\n";
     const uint64_t skipped = skippedCycles();
     if (skipped) {
         snprintf(line, sizeof(line), "  graph cycles skipped: %llu\n", (unsigned long long)skipped);

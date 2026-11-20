@@ -1,6 +1,7 @@
 #pragma once
 
 #include "frame_timeline.h"
+#include "graph_clock.h"
 
 #include <memory>
 #include <string>
@@ -24,19 +25,22 @@ public:
     virtual const VirtualDeviceSpec& spec() const = 0;
     // The device's audio on the graph's clock.
     virtual const std::shared_ptr<FrameTimeline>& timeline() const = 0;
-    // Recording: how far behind the present the device reads what the graph wrote.
-    virtual int64_t readBehindFrames() const = 0;
     virtual std::string status() const = 0;
     virtual bool streaming() const = 0;  // an application is playing or recording on it
+    // How its timing went since the last call, in a few words, for reports.
+    virtual std::string takeTiming() = 0;
 };
 
 // Wolfe's own sound devices. Windows has them through usbip-win2, which must
 // be installed (no administrator rights are needed to use it): Wolfe serves
 // them over USB/IP on 127.0.0.1 and asks usbip-win2 to attach them. They are
 // detached again when removed, and when Wolfe exits.
+//
+// They keep the pace of `clock`, the graph's: a speaker is fed by Windows as
+// fast as the graph consumes, a microphone delivers as fast as it produces.
 class VirtualDevices {
 public:
-    explicit VirtualDevices(int port = 3241);
+    explicit VirtualDevices(std::shared_ptr<const GraphClock> clock, int port = 3241);
     ~VirtualDevices();
 
     std::shared_ptr<VirtualDevice> add(const VirtualDeviceSpec& spec);
