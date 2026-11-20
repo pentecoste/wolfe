@@ -39,9 +39,19 @@ bool engineIsFine(const std::string& status) {
            startsWith(status, "ready") || startsWith(status, "being added");
 }
 
-float factorOf(float gainDb) { return std::pow(10.0f, gainDb / 20.0f); }
+float within(const EffectParameter& parameter, float value) {
+    return std::max(parameter.min, std::min(parameter.max, value));
+}
 
-const char* const kGainLabel = "Gain";
+// An effect's settings: the initial ones, with those given in place of them.
+std::vector<float> settingsOf(const EffectType& type, const std::map<std::string, double>& given) {
+    std::vector<float> values;
+    for (const EffectParameter& parameter : type.parameters) {
+        auto found = given.find(parameter.key);
+        values.push_back(found == given.end() ? parameter.initial : within(parameter, (float)found->second));
+    }
+    return values;
+}
 
 }  // namespace
 
@@ -145,7 +155,11 @@ void Controller::save() {
         out.type = node.type;
         out.target = node.target;
         out.serial = node.serial;
-        out.gainDb = node.gainDb;
+        if (const EffectType* type = findEffectType(node.type); type && node.kind == NodeKind::Effect) {
+            for (size_t i = 0; i < type->parameters.size() && i < node.parameters.size(); i++) {
+                out.parameters[type->parameters[i].key] = node.parameters[i];
+            }
+        }
         if (node.isDevice()) out.label = node.label;
         out.hasPosition = node.hasPosition;
         out.x = node.x;
@@ -199,16 +213,17 @@ std::string Controller::adopt(const GraphDescription& description) {
             node.label = in.target;
             node.serial = in.serial.empty() ? serialFor(node.id) : in.serial;
             node.detail = node.kind == NodeKind::WolfeSpeaker ? "Wolfe speaker" : "Wolfe microphone";
-        } else if (in.type == "gain" || in.type == "mix" || in.type == "rnnoise") {
+        } else if (const EffectType* type = findEffectType(in.type)) {
             // A junction of the earlier versions is a gain that changes nothing.
             // So is, from now on, noise suppression: its links are kept that way.
             if (in.type == "rnnoise") {
                 problems += "\"" + in.id + "\" was noise suppression, which Wolfe no longer has: it is a gain at 0 dB now.\n";
             }
-            node.kind = NodeKind::Gain;
-            node.type = "gain";
-            node.label = kGainLabel;
-            node.gainDb = std::max(kMinGainDb, std::min(kMaxGainDb, (float)in.gainDb));
+            if (!type->offered) type = findEffectType("gain");
+            node.kind = NodeKind::Effect;
+            node.type = type->type;
+            node.label = type->name;
+            node.parameters = settingsOf(*type, type->type == in.type ? in.parameters : std::map<std::string, double>());
             node.present = true;
         } else {
             problems += "\"" + in.id + "\" is a kind of node Wolfe does not have (" + in.type + "): it was left out.\n";
@@ -296,7 +311,11 @@ void Controller::ensureEngine(Node& node) {
     description.type = node.type;
     description.target = node.target;
     description.serial = node.serial;
-    description.gainDb = node.gainDb;
+    if (const EffectType* type = findEffectType(node.type); type && node.kind == NodeKind::Effect) {
+        for (size_t i = 0; i < type->parameters.size() && i < node.parameters.size(); i++) {
+            description.parameters[type->parameters[i].key] = node.parameters[i];
+        }
+    }
     addNode(description, graph_);
     node.active = true;
 }
@@ -383,12 +402,15 @@ void Controller::disconnectAll(int nodeUid) {
 // Boxes
 // ---------------------------------------------------------------------------
 
-int Controller::addGain(float x, float y) {
+int Controller::addEffect(const std::string& type, float x, float y) {
+    const EffectType* description = findEffectType(type);
+    if (!description || !description->offered) return 0;
     Node node;
-    node.id = newId("gain|");
-    node.kind = NodeKind::Gain;
-    node.type = "gain";
-    node.label = kGainLabel;
+    node.id = newId((type + "|").c_str());
+    node.kind = NodeKind::Effect;
+    node.type = type;
+    node.label = description->name;
+    node.parameters = settingsOf(*description, {});
     node.present = true;
     node.hasPosition = true;
     node.x = x;
@@ -397,14 +419,22 @@ int Controller::addGain(float x, float y) {
     return insertNode(node);
 }
 
-void Controller::setGainDb(int nodeUid, float gainDb) {
+void Controller::setParameter(int nodeUid, int index, float value) {
     Node* node = find(nodeUid);
-    if (!node || node->kind != NodeKind::Gain) return;
-    gainDb = std::max(kMinGainDb, std::min(kMaxGainDb, gainDb));
-    if (node->gainDb == gainDb) return;
-    node->gainDb = gainDb;
-    if (node->active) graph_.setEffectGain(node->id, factorOf(gainDb));
+    const EffectType* type = node ? findEffectType(node->type) : nullptr;
+    if (!type || node->kind != NodeKind::Effect || index < 0 || index >= (int)node->parameters.size()) return;
+    value = within(type->parameters[index], value);
+    if (node->parameters[index] == value) return;
+    node->parameters[index] = value;
+    if (node->active) graph_.setEffectParameter(node->id, index, value);
     markDirty();
+}
+
+void Controller::resetParameters(int nodeUid) {
+    Node* node = find(nodeUid);
+    const EffectType* type = node ? findEffectType(node->type) : nullptr;
+    if (!type) return;
+    for (size_t i = 0; i < type->parameters.size(); i++) setParameter(nodeUid, (int)i, type->parameters[i].initial);
 }
 
 std::vector<DeviceInfo> Controller::devicesToAdd(bool recording) const {
@@ -519,7 +549,7 @@ void Controller::moveNode(int nodeUid, float x, float y) {
 }
 
 // A box from a file that does not say where it goes (one written by hand):
-// sources on the left, gains in the middle, sinks on the right, each under
+// sources on the left, effects in the middle, sinks on the right, each under
 // the lowest box of its column.
 void Controller::place(Node& node) {
     const float x = node.givesLinks() && !node.takesLinks() ? 80.0f : node.takesLinks() && !node.givesLinks() ? 680.0f : 380.0f;
@@ -592,7 +622,7 @@ void Controller::apply(const Discovery& discovery) {
     // audio flowing if any of its streams has it; those with audio first.
     for (Node& node : nodes_) {
         node.apps.clear();
-        if (node.kind == NodeKind::Gain) continue;
+        if (node.kind == NodeKind::Effect) continue;
         const std::string device = node.isWolfeDevice() ? node.endpoint : node.resolved ? node.target : std::string();
         const bool recording = node.kind == NodeKind::Input || node.kind == NodeKind::WolfeMic;
         if (device.empty()) continue;
@@ -633,7 +663,7 @@ void Controller::update(double now) {
     const float fall = (float)std::exp(-elapsed / 0.3);
     for (Node& node : nodes_) {
         float peak = 0.0f;
-        if (node.kind != NodeKind::Gain) {
+        if (node.kind != NodeKind::Effect) {
             auto found = devicePeaks.find(node.isWolfeDevice() ? node.endpoint : node.target);
             if (found != devicePeaks.end()) peak = found->second;
         }

@@ -2,6 +2,7 @@
 
 #include "graph.h"
 
+#include <map>
 #include <string>
 #include <vector>
 
@@ -18,7 +19,9 @@ struct NodeDescription {
     std::string target;  // "device", "process" or (Wolfe's devices) "name" in the file; empty for effects
     std::string serial;  // Wolfe's devices: their identity for Windows; made from the id when empty
     std::string label;   // optional name to show instead of the id
-    double gainDb = 0.0; // "gain" nodes
+    // Effects: their settings, by the keys of the type's parameters (see
+    // EffectType); one left out keeps its initial value.
+    std::map<std::string, double> parameters;
     bool hasPosition = false;  // where the graphical editor drew it
     float x = 0, y = 0;
 };

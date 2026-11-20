@@ -25,11 +25,11 @@ public:
 private:
     // Something that can be added to the canvas, as the search lists it.
     struct Choice {
-        enum Kind { Gain, WolfeSpeaker, WolfeMic, Microphone, Speaker } kind;
+        enum Kind { Effect, WolfeSpeaker, WolfeMic, Microphone, Speaker } kind;
         std::string title;
-        std::string hint;      // shown greyed after the title
-        std::string words;     // what a search matches, lower case
-        std::string deviceId;  // Microphone and Speaker
+        std::string hint;    // shown greyed after the title
+        std::string words;   // what a search matches, lower case
+        std::string target;  // Effect: its type; Microphone and Speaker: the device's id
     };
 
     void drawMenuBar();

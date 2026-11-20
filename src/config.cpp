@@ -66,8 +66,12 @@ GraphDescription loadDescription(const std::string& path) {
             node.serial = optionalString(item, "serial");
         }
         node.label = optionalString(item, "label");
-        if (node.type == "gain" && item.contains("gain_db") && item["gain_db"].is_number()) {
-            node.gainDb = item["gain_db"].get<double>();
+        if (const EffectType* effect = findEffectType(node.type)) {
+            for (const EffectParameter& parameter : effect->parameters) {
+                if (item.contains(parameter.key) && item[parameter.key].is_number()) {
+                    node.parameters[parameter.key] = item[parameter.key].get<double>();
+                }
+            }
         }
         if (item.contains("x") && item.contains("y") && item["x"].is_number() && item["y"].is_number()) {
             node.hasPosition = true;
@@ -105,7 +109,7 @@ void saveDescription(const std::string& path, const GraphDescription& descriptio
             item["name"] = node.target;
             if (!node.serial.empty()) item["serial"] = node.serial;
         }
-        if (node.type == "gain") item["gain_db"] = std::round(node.gainDb * 10.0) / 10.0;
+        for (const auto& [key, value] : node.parameters) item[key] = std::round(value * 1000.0) / 1000.0;
         if (!node.label.empty()) item["label"] = node.label;
         if (node.hasPosition) {
             item["x"] = std::round(node.x);
@@ -153,7 +157,11 @@ void addNode(const NodeDescription& node, Graph& graph) {
         graph.addVirtualDevice(node.id, spec);
     } else {
         graph.addEffect(node.id, node.type);
-        if (node.type == "gain") graph.setEffectGain(node.id, (float)std::pow(10.0, node.gainDb / 20.0));
+        const EffectType* effect = findEffectType(node.type);
+        for (size_t i = 0; effect && i < effect->parameters.size(); i++) {
+            auto value = node.parameters.find(effect->parameters[i].key);
+            if (value != node.parameters.end()) graph.setEffectParameter(node.id, (int)i, (float)value->second);
+        }
     }
 }
 

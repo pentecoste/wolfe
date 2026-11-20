@@ -14,11 +14,11 @@
 namespace wolfe {
 
 // What a box on the canvas is. Audio comes out of sources (pin on the right)
-// and goes into sinks (pin on the left); a gain has both.
+// and goes into sinks (pin on the left); an effect has both.
 enum class NodeKind {
     Input,         // source: a recording device of the computer (a microphone, the far end of a cable...)
     WolfeSpeaker,  // source: one of Wolfe's own playback devices; what applications play on it comes in
-    Gain,          // passes on what comes into it, louder or quieter
+    Effect,        // changes what comes into it and passes it on: a gain, a filter, a reverb... (see effect.h)
     Output,        // sink: a playback device of the computer (headphones, speakers...)
     WolfeMic,      // sink: one of Wolfe's own recording devices; applications that record from it hear it
 };
@@ -34,8 +34,8 @@ struct AppUse {
 struct Node {
     int uid = 0;          // number used by the canvas; changes from one run to the next
     std::string id;       // name inside the engine and in the saved file
-    NodeKind kind = NodeKind::Gain;
-    std::string type;     // as in the file: "input", "output", "virtual_speaker", "virtual_mic", "gain"
+    NodeKind kind = NodeKind::Effect;
+    std::string type;     // as in the file: "input", "output", "virtual_speaker", "virtual_mic", or an effect type
     // Devices: the device's id, or part of its name until it is found.
     // Wolfe's devices: their name.
     std::string target;
@@ -43,7 +43,8 @@ struct Node {
     std::string endpoint;  // Wolfe's devices: the id Windows gave the device, once it has it
     std::string label;
     std::string detail;    // second line under the title
-    float gainDb = 0.0f;   // gains
+    // Effects: the value of each of the type's parameters, in their order.
+    std::vector<float> parameters;
 
     bool resolved = false;  // devices: `target` is the device's own id, not part of its name
     bool present = false;   // the device is plugged in (Wolfe's: Windows has it)
@@ -61,8 +62,8 @@ struct Node {
     bool isWolfeDevice() const { return kind == NodeKind::WolfeSpeaker || kind == NodeKind::WolfeMic; }
     bool isDevice() const { return kind == NodeKind::Input || kind == NodeKind::Output; }
     // Whether it has a pin audio comes out of / goes into.
-    bool givesLinks() const { return kind == NodeKind::Input || kind == NodeKind::WolfeSpeaker || kind == NodeKind::Gain; }
-    bool takesLinks() const { return kind == NodeKind::Output || kind == NodeKind::WolfeMic || kind == NodeKind::Gain; }
+    bool givesLinks() const { return kind == NodeKind::Input || kind == NodeKind::WolfeSpeaker || kind == NodeKind::Effect; }
+    bool takesLinks() const { return kind == NodeKind::Output || kind == NodeKind::WolfeMic || kind == NodeKind::Effect; }
 };
 
 // A link: audio that the engine carries from one node to another, as it is.
@@ -125,8 +126,13 @@ public:
     void disconnect(int linkUid);
     void disconnectAll(int nodeUid);
 
-    int addGain(float x, float y);
-    void setGainDb(int nodeUid, float gainDb);
+    // An effect of one of the types effectTypes() offers. 0 for any other type.
+    int addEffect(const std::string& type, float x, float y);
+    // One of an effect's settings, by its index in the type's parameters;
+    // kept within the parameter's range.
+    void setParameter(int nodeUid, int index, float value);
+    // Every setting of an effect back to its initial value.
+    void resetParameters(int nodeUid);
     // A box for a device of the computer, by its id (see devicesToAdd()). 0 if it cannot be made.
     int addDevice(bool recording, const std::string& deviceId, float x, float y);
     // The computer's devices that are not on the canvas yet, Wolfe's own left out.
@@ -151,8 +157,6 @@ public:
 
     // While nobody is looking at the canvas the system is looked at less often.
     void setWatched(bool someoneIsLooking);
-
-    static constexpr float kMinGainDb = -100.0f, kMaxGainDb = 40.0f;
 
 private:
     Node* find(int uid);

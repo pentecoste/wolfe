@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <functional>
 #include <random>
 #include <vector>
 
@@ -291,19 +292,197 @@ void testGainNode() {
     node->process(stereo);
     expect(stereo[0] == 0.5f && stereo[kQuantum * kChannels - 1] == 0.5f, "at first it changes nothing");
 
-    node->setGain(0.25f);
+    node->setParameter(0, (float)(20.0 * std::log10(0.25)));  // in dB
     fill();
     node->process(stereo);
     float largestStep = 0.0f;
     for (int i = 1; i < kQuantum; i++) largestStep = std::max(largestStep, std::fabs(stereo[i * 2] - stereo[(i - 1) * 2]));
     expect(stereo[0] < 0.5f && stereo[0] > 0.49f, "a new gain starts from the old one");
-    expect(std::fabs(stereo[(kQuantum - 1) * 2] - 0.125f) < 1e-6f && largestStep < 0.001f,
+    expect(std::fabs(stereo[(kQuantum - 1) * 2] - 0.125f) < 1e-5f && largestStep < 0.001f,
            "and arrives at the end of the cycle, a little at a time");
     expect(stereo[(kQuantum - 1) * 2 + 1] == stereo[(kQuantum - 1) * 2], "on both channels");
 
     fill();
     node->process(stereo);
-    expect(stereo[0] == 0.125f && stereo[kQuantum * kChannels - 1] == 0.125f, "then it stays there");
+    expect(std::fabs(stereo[0] - 0.125f) < 1e-5f && stereo[kQuantum * kChannels - 1] == stereo[0], "then it stays there");
+}
+
+// --- the other effects --------------------------------------------------------
+
+using Signal = std::function<float(int frame)>;  // the same on both sides
+
+void set(Effect& effect, const char* type, const char* key, float value) {
+    const EffectType* description = findEffectType(type);
+    for (size_t i = 0; i < description->parameters.size(); i++) {
+        if (std::string(description->parameters[i].key) == key) effect.setParameter((int)i, value);
+    }
+}
+
+// The left side of what comes out, `seconds` long.
+std::vector<float> run(Effect& effect, double seconds, const Signal& signal, std::vector<float>* right = nullptr) {
+    std::vector<float> left;
+    float stereo[kQuantum * kChannels];
+    const int cycles = (int)(seconds * kSampleRate / kQuantum);
+    for (int cycle = 0; cycle < cycles; cycle++) {
+        for (int i = 0; i < kQuantum; i++) stereo[i * 2] = stereo[i * 2 + 1] = signal(cycle * kQuantum + i);
+        effect.process(stereo);
+        for (int i = 0; i < kQuantum; i++) {
+            left.push_back(stereo[i * 2]);
+            if (right) right->push_back(stereo[i * 2 + 1]);
+        }
+    }
+    return left;
+}
+
+Signal sine(double hz, float amplitude) {
+    return [=](int frame) { return amplitude * (float)std::sin(2.0 * kPi * hz * frame / kSampleRate); };
+}
+
+// Level in dB of a stretch of samples, from `from` seconds on.
+double rmsDb(const std::vector<float>& samples, double from, double to = 1e9) {
+    double sum = 0;
+    size_t count = 0;
+    for (size_t i = (size_t)(from * kSampleRate); i < samples.size() && i < (size_t)(to * kSampleRate); i++, count++) {
+        sum += (double)samples[i] * samples[i];
+    }
+    return 10.0 * std::log10(sum / std::max<size_t>(count, 1) + 1e-30);
+}
+
+double peakOf(const std::vector<float>& samples, double from) {
+    double peak = 0;
+    for (size_t i = (size_t)(from * kSampleRate); i < samples.size(); i++) peak = std::max(peak, (double)std::fabs(samples[i]));
+    return peak;
+}
+
+// Every effect the editor offers, with its settings all at the bottom, all at
+// the top or as they start, stays finite and bounded on loud noise and tone,
+// and on the silence after it.
+void testEffectsStayBounded() {
+    printf("every effect, at the edges of its settings\n");
+    std::mt19937 random(42);
+    std::uniform_real_distribution<float> noise(-0.3f, 0.3f);
+    const Signal loud = [&](int frame) { return 0.7f * (float)std::sin(2.0 * kPi * 440.0 * frame / kSampleRate) + noise(random); };
+    const Signal silence = [](int) { return 0.0f; };
+    int fine = 0, tried = 0;
+    for (const EffectType& type : effectTypes()) {
+        if (!type.offered) continue;
+        for (int setting = 0; setting < 3; setting++) {
+            std::shared_ptr<Effect> effect = createEffect(type.type);
+            for (size_t i = 0; i < type.parameters.size(); i++) {
+                const EffectParameter& parameter = type.parameters[i];
+                if (setting == 1) effect->setParameter((int)i, parameter.min);
+                if (setting == 2) effect->setParameter((int)i, parameter.max);
+            }
+            std::vector<float> out = run(*effect, 2.0, loud);
+            const std::vector<float> after = run(*effect, 2.0, silence);
+            out.insert(out.end(), after.begin(), after.end());
+            bool ok = true;
+            for (float sample : out) ok &= std::isfinite(sample) && std::fabs(sample) < 200.0f;  // gain goes up to +40 dB
+            if (!ok) printf("    %s, settings %s: out of bounds\n", type.type, setting == 1 ? "at the bottom" : setting == 2 ? "at the top" : "as they start");
+            fine += ok ? 1 : 0;
+            tried++;
+        }
+    }
+    expect(fine == tried, "finite and bounded");
+}
+
+void testEffectsDoTheirJob() {
+    printf("what each effect does\n");
+    {
+        std::shared_ptr<Effect> filter = createEffect("highpass");
+        set(*filter, "highpass", "cutoff_hz", 1000);
+        const double low = rmsDb(run(*filter, 1.0, sine(50, 0.5f)), 0.5);
+        filter = createEffect("highpass");
+        set(*filter, "highpass", "cutoff_hz", 1000);
+        const double high = rmsDb(run(*filter, 1.0, sine(8000, 0.5f)), 0.5);
+        const double reference = rmsDb(run(*createEffect("gain"), 1.0, sine(8000, 0.5f)), 0.5);
+        printf("    high-pass at 1 kHz: 50 Hz %.1f dB, 8 kHz %+.2f dB\n", low - reference, high - reference);
+        expect(low - reference < -40.0 && std::fabs(high - reference) < 0.5, "high-pass: lows out, highs through");
+    }
+    {
+        std::shared_ptr<Effect> filter = createEffect("lowpass");
+        set(*filter, "lowpass", "cutoff_hz", 1000);
+        const double high = rmsDb(run(*filter, 1.0, sine(8000, 0.5f)), 0.5);
+        filter = createEffect("lowpass");
+        set(*filter, "lowpass", "cutoff_hz", 1000);
+        const double low = rmsDb(run(*filter, 1.0, sine(100, 0.5f)), 0.5);
+        const double reference = rmsDb(run(*createEffect("gain"), 1.0, sine(100, 0.5f)), 0.5);
+        printf("    low-pass at 1 kHz: 8 kHz %.1f dB, 100 Hz %+.2f dB\n", high - reference, low - reference);
+        expect(high - reference < -30.0 && std::fabs(low - reference) < 0.5, "low-pass: highs out, lows through");
+    }
+    {
+        std::shared_ptr<Effect> eq = createEffect("equalizer");
+        set(*eq, "equalizer", "low_db", 12);
+        const double boosted = rmsDb(run(*eq, 1.0, sine(40, 0.1f)), 0.5) - rmsDb(run(*createEffect("gain"), 1.0, sine(40, 0.1f)), 0.5);
+        printf("    equalizer, lows +12 dB: 40 Hz %+.1f dB\n", boosted);
+        expect(boosted > 10.0 && boosted < 12.5, "equalizer: the lows go up");
+    }
+    {
+        std::shared_ptr<Effect> compressor = createEffect("compressor");  // -20 dB, 4:1
+        const double peak = 20.0 * std::log10(peakOf(run(*compressor, 2.0, sine(200, 1.0f)), 1.5));
+        printf("    compressor, 0 dB in, -20 dB threshold, 4:1: %.1f dB out\n", peak);
+        expect(peak > -17.0 && peak < -13.0, "compressor: 20 dB over the threshold comes out 5 dB over it");
+    }
+    {
+        std::shared_ptr<Effect> limiter = createEffect("limiter");
+        set(*limiter, "limiter", "ceiling_db", -6);
+        const double peak = peakOf(run(*limiter, 1.0, sine(200, 1.0f)), 0.0);
+        expect(peak <= std::pow(10.0, -6.0 / 20.0) + 1e-4, "limiter: never over the ceiling, from the first sample");
+    }
+    {
+        std::shared_ptr<Effect> gate = createEffect("gate");  // -50 dB
+        const double hiss = rmsDb(run(*gate, 1.0, sine(1000, 0.0003f)), 0.5);
+        const double voice = rmsDb(run(*gate, 1.0, sine(1000, 0.1f)), 0.5) - rmsDb(run(*createEffect("gain"), 1.0, sine(1000, 0.1f)), 0.5);
+        printf("    noise gate at -50 dB: a -70 dB hiss comes out at %.0f dB, a -20 dB tone %+.2f dB\n", hiss, voice);
+        expect(hiss < -120.0 && std::fabs(voice) < 0.1, "noise gate: closed under the threshold, open over it");
+    }
+    {
+        std::shared_ptr<Effect> delay = createEffect("delay");
+        set(*delay, "delay", "time_ms", 100);
+        set(*delay, "delay", "feedback", 0);
+        set(*delay, "delay", "mix", 100);
+        const std::vector<float> out = run(*delay, 0.5, [](int frame) { return frame == 0 ? 1.0f : 0.0f; });
+        const size_t at = std::max_element(out.begin(), out.end()) - out.begin();
+        printf("    delay of 100 ms: the click comes back after %.2f ms\n", at * 1000.0 / kSampleRate);
+        expect(at >= 4799 && at <= 4801, "delay: the echo arrives when it should");
+    }
+    {
+        std::shared_ptr<Effect> reverb = createEffect("reverb");
+        set(*reverb, "reverb", "mix", 100);
+        const std::vector<float> out = run(*reverb, 4.0, [](int frame) { return frame < 48 ? 0.5f : 0.0f; });
+        const double early = rmsDb(out, 0.1, 0.6), late = rmsDb(out, 3.0, 4.0);
+        printf("    reverb: %.0f dB in the first half second, %.0f dB after three seconds\n", early, late);
+        expect(early > -60.0 && late < early - 30.0, "reverb: a tail that dies away");
+    }
+    {
+        std::shared_ptr<Effect> crusher = createEffect("bitcrusher");
+        set(*crusher, "bitcrusher", "bits", 2);
+        const std::vector<float> out = run(*crusher, 0.5, sine(300, 0.9f));
+        bool fewLevels = true;
+        int longestRun = 0, runLength = 1, shortestRun = 1000;
+        for (size_t i = 0; i < out.size(); i++) {
+            fewLevels &= out[i] == 0.0f || std::fabs(std::fabs(out[i]) - 0.5f) < 1e-6f || std::fabs(std::fabs(out[i]) - 1.0f) < 1e-6f;
+            if (i > 0 && out[i] == out[i - 1]) runLength++;
+            else if (i > 0) shortestRun = std::min(shortestRun, runLength), runLength = 1;
+            longestRun = std::max(longestRun, runLength);
+        }
+        expect(fewLevels, "bitcrusher: 2 bits leave only a few levels");
+        expect(shortestRun >= 5, "and at 8000 Hz each value is held for 6 samples");
+    }
+    {
+        std::shared_ptr<Effect> pan = createEffect("pan");
+        set(*pan, "pan", "pan", 100);
+        std::vector<float> right;
+        const std::vector<float> left = run(*pan, 0.2, sine(500, 0.5f), &right);
+        expect(peakOf(left, 0.05) == 0.0 && std::fabs(peakOf(right, 0.05) - 0.5) < 0.01, "pan: all the way right, left silent");
+    }
+    {
+        std::shared_ptr<Effect> tremolo = createEffect("tremolo");
+        set(*tremolo, "tremolo", "depth", 100);
+        const std::vector<float> out = run(*tremolo, 1.0, [](int) { return 0.5f; });
+        const auto [low, high] = std::minmax_element(out.begin(), out.end());
+        expect(*low < 0.01f && *high > 0.49f, "tremolo: at full depth the volume goes all the way down and back");
+    }
 }
 
 }  // namespace
@@ -321,6 +500,8 @@ int main() {
     testLateBlocks();
     testRnnoiseNode();
     testGainNode();
+    testEffectsStayBounded();
+    testEffectsDoTheirJob();
     printf(g_failures ? "\n%d check(s) FAILED\n" : "\nall checks passed\n", g_failures);
     return g_failures ? 1 : 0;
 }

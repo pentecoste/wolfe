@@ -1,6 +1,6 @@
 # Wolfe
 
-An audio patchbay for Windows: microphones, speakers and gains are boxes,
+An audio patchbay for Windows: microphones, speakers and effects are boxes,
 and you decide what goes where. The idea is what qpwgraph or Carla give you
 on Linux, built on what Windows offers.
 
@@ -43,16 +43,39 @@ This produces, in `build/`:
 The canvas shows only what you put on it. **Ctrl+A** opens a search for
 something to add: type part of its name, and Enter adds the one highlighted
 (Up and Down choose another). The Add menu, and a right click on the canvas,
-offer the search, a gain and Wolfe's own devices; the computer's microphones
-and speakers are added from the search.
+offer the search, the effects and Wolfe's own devices; the computer's
+microphones and speakers are added from the search.
 
 | box              | what it is                                                                          | pin   |
 |------------------|-------------------------------------------------------------------------------------|-------|
 | Microphone       | a recording device of the computer (a microphone, the far end of a virtual cable)  | out   |
 | Wolfe speaker    | a playback device of Wolfe's own: what applications play on it comes into Wolfe     | out   |
-| Gain             | passes on what is linked into it, louder or quieter                                 | both  |
+| an effect        | changes what is linked into it and passes it on (see below)                        | both  |
 | Speaker          | a playback device of the computer (headphones, speakers)                           | in    |
 | Wolfe microphone | a recording device of Wolfe's own: applications that record from it hear what is linked into it | in |
+
+The effects, and their settings:
+
+| effect      | what it does                                                        | settings (in the file)                                   |
+|-------------|---------------------------------------------------------------------|----------------------------------------------------------|
+| Gain        | louder or quieter, -100 to +40 dB                                   | `gain_db`                                                |
+| Pan         | toward the left (-100) or the right (+100): the other side gets quieter | `pan`                                                 |
+| Compressor  | above the threshold the level rises only 1/ratio as much: evens out a voice | `threshold_db`, `ratio`, `attack_ms`, `release_ms`, `makeup_db` |
+| Limiter     | never louder than the ceiling: protects ears and recordings         | `ceiling_db`, `release_ms`                               |
+| Noise gate  | silent while the sound stays under the threshold: hides a microphone's hiss between words | `threshold_db`, `release_ms`        |
+| High-pass   | lets through what is above the cutoff, 12 dB per octave: takes away rumble and hum | `cutoff_hz`, `q` (resonance)              |
+| Low-pass    | lets through what is below the cutoff, 12 dB per octave: takes away hiss and harshness | `cutoff_hz`, `q`                      |
+| Equalizer   | lows (below 150 Hz), mids (around 1 kHz) and highs (above 5 kHz) up or down | `low_db`, `mid_db`, `high_db`                    |
+| Delay       | echoes, each one quieter by the feedback                            | `time_ms`, `feedback`, `mix` (percent)                   |
+| Reverb      | a room around the sound (Freeverb)                                  | `size`, `damping`, `mix` (percent)                       |
+| Chorus      | copies slightly out of time that swing: a thicker, shimmering sound | `rate_hz`, `depth_ms`, `mix`                             |
+| Tremolo     | the volume going down and up again, over and over                   | `rate_hz`, `depth`                                       |
+| Distortion  | rounds off the peaks: warm at low drive, fuzzy at high drive        | `drive_db`, `mix`                                        |
+| Bitcrusher  | fewer levels and fewer samples a second: lo-fi, old game consoles   | `bits`, `rate_hz`                                        |
+
+`mix` is how much of the processed sound replaces the original: at 0 the
+effect changes nothing. Apart from the echoes that Delay, Reverb and Chorus
+are for, effects add no delay to the audio.
 
 Wolfe takes audio from microphones and from its own speakers, and sends it to
 speakers and to its own microphones. It does not show applications and does
@@ -69,8 +92,8 @@ inputs, so that it does not apply its voice processing to them.
   off, and goes onto the pin you let go on. Pulled well away and let go over
   nothing, the link is removed; so it is with Ctrl+click, or by clicking it
   and pressing Delete.
-- A gain's value is dragged left or right; a double click lets you type one,
-  from -100 to +40 dB.
+- An effect's settings are dragged left or right (Shift: faster, Alt: finer);
+  a double click lets you type one. Its menu puts them back as they started.
 - Right-click a box or a link for its menu. Delete removes what is selected.
 - Middle button, or Alt + drag, moves the view.
 
@@ -151,7 +174,7 @@ The window writes the same format, adding where each box is drawn. Comments
 | `virtual_mic`     | one of Wolfe's recording devices            | `name`   |
 | `input`           | a recording device                          | `device` |
 | `output`          | a playback device                           | `device` |
-| `gain`            | louder or quieter: `gain_db`, 0 if left out |          |
+| an effect         | `gain`, `pan`, `compressor`, `limiter`, `gate`, `highpass`, `lowpass`, `equalizer`, `delay`, `reverb`, `chorus`, `tremolo`, `distortion`, `bitcrusher` | its settings, by the names in the table above; one left out keeps its initial value |
 
 `device` is `default`, or any part of the device name as `wolfe-cli devices`
 shows it. Devices that are missing are retried every second.
@@ -169,7 +192,7 @@ report shows `late` counts that keep growing.
 The console program also knows a few things the window does not offer:
 `loopback` nodes (everything played on a playback device, `device`), `app`
 nodes (everything one application plays, `process`), `mix` and `rnnoise`
-(noise suppression for voice) nodes, and `gain_db` on a link. In a file the
+(noise suppression for voice) effects, and `gain_db` on a link. In a file the
 window loads, `mix` and `rnnoise` nodes become gains at 0 dB (so that their
 links stay), links lose their gain, and the rest is left out; its log says
 what was changed.

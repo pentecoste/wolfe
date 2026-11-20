@@ -84,8 +84,8 @@ public:
     void addLink(const std::string& from, const std::string& to, float gain = 1.0f);
     void removeLink(const std::string& from, const std::string& to);
     void setLinkGain(const std::string& from, const std::string& to, float gain);
-    // The gain of an effect that has one (see Effect::setGain), as a factor.
-    void setEffectGain(const std::string& id, float gain);
+    // A setting of an effect, by its index in the type's parameters (see EffectType).
+    void setEffectParameter(const std::string& id, int index, float value);
 
     // Extra age given to the audio on top of the minimum, to absorb timing
     // irregularities. More is safer, less is faster. Applies to nodes added later.

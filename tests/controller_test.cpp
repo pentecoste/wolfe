@@ -133,8 +133,8 @@ void testGains() {
         controller.apply(system());
         const int mic = controller.addDevice(true, "{fake-mic}", 100, 100);
         const int phones = controller.addDevice(false, "{fake-phones}", 700, 100);
-        const int first = controller.addGain(400, 100), second = controller.addGain(400, 300);
-        expect(first && second && controller.node(first)->gainDb == 0.0f, "a gain starts at 0 dB");
+        const int first = controller.addEffect("gain", 400, 100), second = controller.addEffect("gain", 400, 300);
+        expect(first && second && controller.node(first)->parameters[0] == 0.0f, "a gain starts at 0 dB");
         expect(controller.node(first)->givesLinks() && controller.node(first)->takesLinks(), "audio goes in and comes out");
 
         expect(controller.connect(mic, first).empty() && controller.connect(first, phones).empty(),
@@ -142,10 +142,10 @@ void testGains() {
         expect(controller.connect(first, second).empty(), "gain -> gain connects");
         expect(!controller.connect(second, first).empty(), "a loop is refused");
 
-        controller.setGainDb(first, -6.0f);
-        expect(controller.node(first)->gainDb == -6.0f, "the gain changes");
-        controller.setGainDb(second, 1000.0f);
-        expect(controller.node(second)->gainDb == Controller::kMaxGainDb, "within limits");
+        controller.setParameter(first, 0, -6.0f);
+        expect(controller.node(first)->parameters[0] == -6.0f, "the gain changes");
+        controller.setParameter(second, 0, 1000.0f);
+        expect(controller.node(second)->parameters[0] == 40.0f, "within limits");
 
         const int link = linkBetween(controller, mic, first);
         expect(controller.move(link, mic, second).empty() && hasLink(controller, mic, second) &&
@@ -164,10 +164,51 @@ void testGains() {
     reloaded.apply(system());
     const Node* gain = nullptr;
     for (const Node& node : reloaded.nodes()) {
-        if (node.kind == NodeKind::Gain && node.gainDb == -6.0f) gain = &node;
+        if (node.kind == NodeKind::Effect && node.parameters[0] == -6.0f) gain = &node;
     }
     expect(gain && gain->x == 400 && gain->y == 100, "the gain is back where it was, with its value");
     expect(reloaded.links().size() == 3 && reloaded.nodes().size() == 4, "everything else is back too");
+}
+
+void testEffects() {
+    printf("effects\n");
+    const std::string document = tempFile("wolfe-test-effects.json");
+    {
+        Controller controller(document, false);
+        int made = 0, offered = 0;
+        for (const EffectType& type : effectTypes()) {
+            if (!type.offered) continue;
+            offered++;
+            const int uid = controller.addEffect(type.type, 400, 100.0f * offered);
+            const Node* node = controller.node(uid);
+            made += node && node->label == type.name && node->parameters.size() == type.parameters.size() ? 1 : 0;
+        }
+        expect(offered >= 10 && made == offered, "every effect offered can be added, with its settings");
+        expect(controller.addEffect("mix", 0, 0) == 0 && controller.addEffect("nonsense", 0, 0) == 0,
+               "one that is not offered cannot");
+
+        const int filter = controller.addEffect("lowpass", 700, 100);
+        const int reverb = controller.addEffect("reverb", 700, 300);
+        expect(controller.node(filter)->parameters[0] == 8000.0f, "settings start at their initial values");
+        controller.setParameter(filter, 0, 1.0f);
+        expect(controller.node(filter)->parameters[0] == 200.0f, "a setting stays within its range");
+        controller.setParameter(reverb, 0, 85.0f);
+        controller.setParameter(reverb, 9, 1.0f);  // no such setting: nothing happens
+        controller.resetParameters(filter);
+        expect(controller.node(filter)->parameters[0] == 8000.0f, "and can be put back");
+        controller.save();
+    }
+    const std::string text = readFile(document);
+    expect(text.find("\"size\": 85.0") != std::string::npos, "settings are written in the file by name");
+
+    Controller reloaded(document, false);
+    expect(reloaded.load().empty(), "the file loads without complaints");
+    const Node* reverb = nullptr;
+    for (const Node& node : reloaded.nodes()) {
+        if (node.type == "reverb") reverb = &node;
+    }
+    expect(reverb && reverb->parameters[0] == 85.0f && reverb->parameters[2] == 25.0f,
+           "the reverb is back with what was changed, the rest as it was");
 }
 
 void testHandWrittenFile() {
@@ -191,10 +232,10 @@ void testHandWrittenFile() {
     // (Nothing is linked to "default": that would open the real device.)
     expect(controller.nodes().size() == 4 && controller.links().size() == 2, "four boxes, two links");
     const Node* mic = firstOf(controller, NodeKind::Input);
-    const Node* quiet = firstOf(controller, NodeKind::Gain);
+    const Node* quiet = firstOf(controller, NodeKind::Effect);
     const Node* phones = firstOf(controller, NodeKind::Output);
     const Node* chat = firstOf(controller, NodeKind::WolfeMic);
-    expect(quiet && quiet->gainDb == -3.0f, "the gain has its value");
+    expect(quiet && quiet->parameters[0] == -3.0f, "the gain has its value");
     expect(chat && !chat->serial.empty() && chat->active, "Wolfe's microphone gets a serial number and exists at once");
     expect(mic && quiet && phones && mic->x < quiet->x && quiet->x < phones->x,
            "boxes without a place are laid out: sources, gains, sinks");
@@ -275,7 +316,7 @@ void testApplications() {
         const int music = controller.addWolfeDevice(false, "Wolfe Music", 300, 100, &problem);
         const int phones = controller.addDevice(false, "{fake-phones}", 700, 100);
         const int mic = controller.addDevice(true, "{fake-mic}", 100, 100);
-        const int gain = controller.addGain(400, 300);
+        const int gain = controller.addEffect("gain", 400, 300);
 
         Discovery discovery = system();
         discovery.outputs.push_back({"Speakers (Wolfe Music)", L"{wolfe-music}", false, controller.node(music)->serial});
@@ -326,7 +367,7 @@ void testLoops() {
     const int cableIn = controller.addDevice(false, "{fake-cable-in}", 700, 100);
     const int cableOut = controller.addDevice(true, "{fake-cable-out}", 100, 100);
     const int mic = controller.addDevice(true, "{fake-mic}", 100, 300);
-    const int gain = controller.addGain(400, 100);
+    const int gain = controller.addEffect("gain", 400, 100);
     expect(!controller.connect(cableOut, cableIn).empty(), "one end of a cable cannot feed the other");
     expect(controller.connect(cableOut, gain).empty(), "the cable's far end into a gain");
     expect(!controller.connect(gain, cableIn).empty(), "and from there into its near end neither");
@@ -368,8 +409,8 @@ void testOldFile() {
         if (node.id == "fx|2") junction = &node;
         if (node.id == "fx|1") denoise = &node;
     }
-    expect(junction && junction->kind == NodeKind::Gain && junction->gainDb == 0.0f, "a junction is a gain at 0 dB");
-    expect(denoise && denoise->kind == NodeKind::Gain && problems.find("noise suppression") != std::string::npos,
+    expect(junction && junction->kind == NodeKind::Effect && junction->parameters[0] == 0.0f, "a junction is a gain at 0 dB");
+    expect(denoise && denoise->kind == NodeKind::Effect && problems.find("noise suppression") != std::string::npos,
            "so is noise suppression, so that its links stay; the user is told");
     expect(controller.nodes().size() == 4 && controller.links().size() == 3, "the rest is there");
     const Node* mic = byLabel(controller, kMic);
@@ -381,6 +422,7 @@ void testOldFile() {
 int main() {
     testDevices();
     testGains();
+    testEffects();
     testHandWrittenFile();
     testWolfeDevices();
     testApplications();

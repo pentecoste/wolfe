@@ -65,9 +65,9 @@ SelfTest::SelfTest(Controller& controller, std::string reportPath)
         // between them passes through the point halfway between the pins,
         // and a third one below.
         const float scale = ImGui::GetStyle().FontScaleDpi;
-        first_ = controller_.addGain((corner + 150.0f) / scale, (corner + 200.0f) / scale);
-        second_ = controller_.addGain((corner + 520.0f) / scale, (corner + 200.0f) / scale);
-        third_ = controller_.addGain((corner + 520.0f) / scale, (corner + 480.0f) / scale);
+        first_ = controller_.addEffect("gain", (corner + 150.0f) / scale, (corner + 200.0f) / scale);
+        second_ = controller_.addEffect("gain", (corner + 520.0f) / scale, (corner + 200.0f) / scale);
+        third_ = controller_.addEffect("gain", (corner + 520.0f) / scale, (corner + 480.0f) / scale);
     });
     wait(5);
 
@@ -141,7 +141,7 @@ SelfTest::SelfTest(Controller& controller, std::string reportPath)
     auto where = std::make_shared<ImVec2>();
     run([this, where] { *where = ImVec2(controller_.node(second_)->x, controller_.node(second_)->y); });
     drag(onValue, rightOfValue);
-    check("dragging a gain's value to the right raises it", [this] { return controller_.node(second_)->gainDb > 0.0f; });
+    check("dragging a gain's value to the right raises it", [this] { return controller_.node(second_)->parameters[0] > 0.0f; });
     check("and leaves the box where it was", [this, where] {
         const Node* node = controller_.node(second_);
         return node->x == where->x && node->y == where->y;
@@ -150,7 +150,7 @@ SelfTest::SelfTest(Controller& controller, std::string reportPath)
     auto gains = std::make_shared<int>(0);
     const auto countGains = [this] {
         int count = 0;
-        for (const Node& node : controller_.nodes()) count += node.kind == NodeKind::Gain ? 1 : 0;
+        for (const Node& node : controller_.nodes()) count += node.kind == NodeKind::Effect ? 1 : 0;
         return count;
     };
     run([gains, countGains] { *gains = countGains(); });
@@ -189,7 +189,7 @@ SelfTest::SelfTest(Controller& controller, std::string reportPath)
         controller_.removeNode(third_);
         std::vector<int> added;
         for (const Node& node : controller_.nodes()) {
-            if (node.kind == NodeKind::Gain) added.push_back(node.uid);
+            if (node.kind == NodeKind::Effect) added.push_back(node.uid);
         }
         for (int uid : added) controller_.removeNode(uid);
         char line[80];

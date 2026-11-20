@@ -8,6 +8,8 @@
 #include <set>
 #include <stdexcept>
 
+#include <xmmintrin.h>
+
 #ifndef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
 #define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x00000002
 #endif
@@ -240,8 +242,8 @@ void Graph::setLinkGain(const std::string& from, const std::string& to, float ga
     if (auto link = findLink(from, to)) link->gain = gain;
 }
 
-void Graph::setEffectGain(const std::string& id, float gain) {
-    if (auto found = effects_.find(id); found != effects_.end()) found->second->setGain(gain);
+void Graph::setEffectParameter(const std::string& id, int index, float value) {
+    if (auto found = effects_.find(id); found != effects_.end()) found->second->setParameter(index, value);
 }
 
 // Collects everything that can reach an output and orders it so that each
@@ -467,6 +469,9 @@ std::string Graph::leader() const {
 }
 
 void Graph::runCycle(Plan& plan, int64_t cycle, const std::string& leaderId, float* leaderOut) {
+    // Numbers too small to matter are taken as zero: in the effects' feedback
+    // loops (reverb, delay, filters) they would otherwise slow everything down.
+    _mm_setcsr(_mm_getcsr() | 0x8040);  // flush to zero, denormals are zero
     const int64_t firstFrame = cycle * kQuantum;
     // When the graph's clock reaches the end of this cycle.
     const double endTime = clock_->timeOf((double)(cycle + 1) * kQuantum);

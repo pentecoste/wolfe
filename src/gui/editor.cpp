@@ -29,7 +29,7 @@ ImU32 titleColour(const Node& node, float brighten) {
     float r, g, b;
     switch (node.kind) {
         case NodeKind::Input: r = 0.20f, g = 0.42f, b = 0.72f; break;  // blue
-        case NodeKind::Gain: r = 0.72f, g = 0.45f, b = 0.16f; break;   // amber
+        case NodeKind::Effect: r = 0.72f, g = 0.45f, b = 0.16f; break;   // amber
         case NodeKind::WolfeSpeaker:
         case NodeKind::WolfeMic: r = 0.66f, g = 0.27f, b = 0.40f; break;  // wine
         default: r = 0.22f, g = 0.56f, b = 0.32f; break;                  // green
@@ -199,7 +199,9 @@ void Editor::drawMenuBar() {
 
 std::vector<Editor::Choice> Editor::choices() const {
     std::vector<Choice> list;
-    list.push_back({Choice::Gain, "Gain", "louder or quieter", "gain volume louder quieter level", {}});
+    for (const EffectType& type : effectTypes()) {
+        if (type.offered) list.push_back({Choice::Effect, type.name, type.hint, toLower(type.words), type.type});
+    }
     list.push_back({Choice::WolfeSpeaker, "Wolfe speaker", "new device: applications play on it",
                     "wolfe speaker new virtual playback output device", {}});
     list.push_back({Choice::WolfeMic, "Wolfe microphone", "new device: applications record from it",
@@ -217,10 +219,10 @@ std::vector<Editor::Choice> Editor::choices() const {
 
 void Editor::choose(const Choice& choice, ImVec2 screenPosition) {
     switch (choice.kind) {
-        case Choice::Gain: placeNew(controller_.addGain(0, 0), screenPosition); break;
+        case Choice::Effect: placeNew(controller_.addEffect(choice.target, 0, 0), screenPosition); break;
         case Choice::Microphone:
         case Choice::Speaker:
-            placeNew(controller_.addDevice(choice.kind == Choice::Microphone, choice.deviceId, 0, 0), screenPosition);
+            placeNew(controller_.addDevice(choice.kind == Choice::Microphone, choice.target, 0, 0), screenPosition);
             break;
         case Choice::WolfeSpeaker:
         case Choice::WolfeMic: {
@@ -242,16 +244,18 @@ void Editor::openSearch(ImVec2 screenPosition) {
 }
 
 // The Add menu, in the menu bar and on a right click on the canvas: the
-// search, and the boxes that are not a device of the computer.
+// search, the effects, and Wolfe's own devices. (The computer's devices are
+// added from the search.)
 void Editor::addItems(ImVec2 screenPosition) {
     if (ImGui::MenuItem("Search...", "Ctrl+A")) openSearch(screenPosition);
     ImGui::Separator();
     const std::vector<Choice> all = choices();
     for (const Choice& choice : all) {
-        if (choice.kind != Choice::Gain) continue;
-        if (ImGui::MenuItem("Gain")) choose(choice, screenPosition);
+        if (choice.kind != Choice::Effect) continue;
+        // Level, tone, space and time, character.
+        if (choice.target == "highpass" || choice.target == "delay" || choice.target == "distortion") ImGui::Separator();
+        if (ImGui::MenuItem(choice.title.c_str())) choose(choice, screenPosition);
     }
-    // (The computer's devices are added from the search.)
     ImGui::Separator();
     for (const Choice& choice : all) {
         if (choice.kind != Choice::WolfeSpeaker && choice.kind != Choice::WolfeMic) continue;
@@ -292,7 +296,7 @@ void Editor::drawSearch() {
     if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
     ImGui::SetNextItemWidth(-FLT_MIN);
     const bool entered = ImGui::InputTextWithHint(
-        "##query", "Add: gain, microphone, speaker, Wolfe speaker...", query_, sizeof(query_),
+        "##query", "Add: gain, reverb, microphone, Wolfe speaker...", query_, sizeof(query_),
         ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackHistory | ImGuiInputTextFlags_CallbackEdit,
         searchKeys, this);
 
@@ -480,7 +484,7 @@ void Editor::drawNode(const Node& node) {
     // The applications that have audio flowing on its device right now (the
     // tooltip lists the others too). The line is there even when there are
     // none, so that the box does not change size as they come and go.
-    if (controller_.showApps() && node.kind != NodeKind::Gain) {
+    if (controller_.showApps() && node.kind != NodeKind::Effect) {
         std::vector<std::string> names;
         for (const AppUse& app : node.apps) {
             if (app.active) names.push_back(app.name);
@@ -491,26 +495,50 @@ void Editor::drawNode(const Node& node) {
     }
 
     const float spacing = ImGui::GetStyle().ItemSpacing.x;
-    if (node.kind == NodeKind::Gain) {
-        // in [value] out: the value is dragged left or right, or typed after a double click.
+    if (node.kind == NodeKind::Effect) {
+        // One field per setting, dragged left or right or typed after a double
+        // click; the first between the pins:  in [value] out.
+        const EffectType* type = findEffectType(node.type);
+        const int count = type ? (int)std::min(type->parameters.size(), node.parameters.size()) : 0;
         const float in = ImGui::CalcTextSize("in").x, out = ImGui::CalcTextSize("out").x;
-        ImNodes::BeginInputAttribute(inputPin(node.uid));
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("in");
-        ImNodes::EndInputAttribute();
-        ImGui::SameLine();
-        ImGui::SetNextItemWidth(width - in - out - 2.0f * spacing);
-        float gain = node.gainDb;
+        const float fieldWidth = width - in - out - 2.0f * spacing;
+        float fieldX = 0.0f;
         ImGui::PushID(node.uid);
-        if (ImGui::DragFloat("##gain", &gain, 0.1f, Controller::kMinGainDb, Controller::kMaxGainDb, "%+.1f dB")) {
-            controller_.setGainDb(node.uid, gain);
+        for (int i = 0; i < std::max(count, 1); i++) {
+            if (i == 0) {
+                ImNodes::BeginInputAttribute(inputPin(node.uid));
+                ImGui::AlignTextToFramePadding();
+                ImGui::TextUnformatted("in");
+                ImNodes::EndInputAttribute();
+                ImGui::SameLine();
+                fieldX = ImGui::GetCursorPosX();
+            } else {
+                ImGui::SetCursorPosX(fieldX);
+            }
+            if (count == 0) {
+                ImGui::Dummy(ImVec2(fieldWidth, ImGui::GetFrameHeight()));
+            } else {
+                const EffectParameter& parameter = type->parameters[i];
+                float value = node.parameters[i];
+                const float speed = parameter.logarithmic ? (parameter.max - parameter.min) / 250.0f : parameter.dragSpeed;
+                const ImGuiSliderFlags flags =
+                    ImGuiSliderFlags_AlwaysClamp | (parameter.logarithmic ? ImGuiSliderFlags_Logarithmic : 0);
+                ImGui::SetNextItemWidth(fieldWidth);
+                ImGui::PushID(i);
+                if (ImGui::DragFloat("##value", &value, speed, parameter.min, parameter.max, parameter.format, flags)) {
+                    controller_.setParameter(node.uid, i, value);
+                }
+                ImGui::PopID();
+            }
+            if (i == 0) {
+                ImGui::SameLine();
+                ImNodes::BeginOutputAttribute(outputPin(node.uid));
+                ImGui::AlignTextToFramePadding();
+                ImGui::TextUnformatted("out");
+                ImNodes::EndOutputAttribute();
+            }
         }
         ImGui::PopID();
-        ImGui::SameLine();
-        ImNodes::BeginOutputAttribute(outputPin(node.uid));
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted("out");
-        ImNodes::EndOutputAttribute();
     } else {
         // A few words saying what it is doing, on the line with the pin.
         std::string state;
@@ -708,14 +736,17 @@ void Editor::drawMenus() {
             ImGui::CloseCurrentPopup();
         } else {
             const int uid = node->uid;
-            const bool isGain = node->kind == NodeKind::Gain;
-            const bool unity = node->gainDb == 0.0f;
+            const EffectType* type = node->kind == NodeKind::Effect ? findEffectType(node->type) : nullptr;
+            bool changed = false;
+            for (size_t i = 0; type && i < type->parameters.size() && i < node->parameters.size(); i++) {
+                changed |= node->parameters[i] != type->parameters[i].initial;
+            }
             const bool connected = controller_.linked(uid);
             ImGui::TextDisabled("%s", node->label.c_str());
             ImGui::Separator();
             // Each of these may change the list of nodes: `node` is not used after them.
-            if (isGain && ImGui::MenuItem("Back to 0 dB", nullptr, false, !unity)) {
-                controller_.setGainDb(uid, 0.0f);
+            if (type && !type->parameters.empty() && ImGui::MenuItem("Reset values", nullptr, false, changed)) {
+                controller_.resetParameters(uid);
             } else if (ImGui::MenuItem("Disconnect everything", nullptr, false, connected)) {
                 controller_.disconnectAll(uid);
             } else if (ImGui::MenuItem("Remove", "Del")) {
