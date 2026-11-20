@@ -425,22 +425,46 @@ private:
     float held_[2] = {0, 0};
 };
 
+// RNNoise (Jean-Marc Valin, Xiph.Org), the noise suppression Mumble uses: a
+// small neural network that tells voice from noise, band by band, and keeps
+// the voice. It works on frames of exactly kQuantum samples, scaled like
+// 16-bit audio, and hands each one back one frame late.
+//
+// The two sides are cleaned separately; when they are the same (a microphone
+// is nearly always mono) the work is done once. Below 100%, the original is
+// mixed back in one frame late too, so that the two line up.
 class RnnoiseEffect : public Effect {
 public:
-    RnnoiseEffect() : state_(rnnoise_create(nullptr)) {}
-    ~RnnoiseEffect() override { rnnoise_destroy(state_); }
+    RnnoiseEffect() : states_{rnnoise_create(nullptr), rnnoise_create(nullptr)} {}
+    ~RnnoiseEffect() override {
+        for (DenoiseState* state : states_) rnnoise_destroy(state);
+    }
 
     void process(float* stereo) override {
-        // RNNoise works on mono frames of exactly kQuantum samples, scaled like
-        // 16-bit audio.
-        float mono[kQuantum];
-        for (int i = 0; i < kQuantum; i++) mono[i] = (stereo[i * 2] + stereo[i * 2 + 1]) * 0.5f * 32768.0f;
-        rnnoise_process_frame(state_, mono, mono);
-        for (int i = 0; i < kQuantum; i++) stereo[i * 2] = stereo[i * 2 + 1] = mono[i] / 32768.0f;
+        const float amount = parameter(0) / 100.0f;
+        bool same = true;
+        for (int i = 0; i < kQuantum && same; i++) same = stereo[i * 2] == stereo[i * 2 + 1];
+
+        float clean[2][kQuantum];
+        for (int side = 0; side < (same ? 1 : 2); side++) {
+            float frame[kQuantum];
+            for (int i = 0; i < kQuantum; i++) frame[i] = stereo[i * 2 + side] * 32768.0f;
+            rnnoise_process_frame(states_[side], clean[side], frame);
+        }
+        if (same) std::copy(clean[0], clean[0] + kQuantum, clean[1]);
+
+        for (int i = 0; i < kQuantum; i++) {
+            for (int side = 0; side < 2; side++) {
+                const float original = stereo[i * 2 + side];
+                stereo[i * 2 + side] = blend(previous_[i * 2 + side], clean[side][i] / 32768.0f, amount);
+                previous_[i * 2 + side] = original;
+            }
+        }
     }
 
 private:
-    DenoiseState* state_;
+    DenoiseState* states_[2];
+    float previous_[kQuantum * 2] = {};  // the last frame as it came in
 };
 
 }  // namespace
@@ -466,6 +490,9 @@ const std::vector<EffectType>& effectTypes() {
         {"gate", "Noise gate", "silent below a level", "noise gate expander mute", true,
          {{"threshold_db", "Threshold %.0f dB", -90, 0, -50, false, 0.2f},
           {"release_ms", "Release %.0f ms", 10, 2000, 200, true, 0}}},
+        {"rnnoise", "Noise suppression", "keeps the voice, removes the rest (RNNoise)",
+         "noise suppression denoise rnnoise background voice", true,
+         {{"amount", "Amount %.0f%%", 0, 100, 100, false, 0.3f}}},
         {"highpass", "High-pass", "cuts the lows: rumble, hum", "highpass hpf filter low cut bass", true,
          {{"cutoff_hz", "Cutoff %.0f Hz", 20, 5000, 100, true, 0},
           {"q", "Resonance %.2f", 0.3f, 10, 0.71f, true, 0}}},
@@ -498,7 +525,6 @@ const std::vector<EffectType>& effectTypes() {
          {{"bits", "Bits %.0f", 1, 16, 8, false, 0.03f},
           {"rate_hz", "Rate %.0f Hz", 500, 48000, 8000, true, 0}}},
         {"mix", "Mix", "a junction", "", false, {}},
-        {"rnnoise", "Noise suppression", "removes background noise from a voice", "", false, {}},
     };
     return types;
 }

@@ -63,6 +63,7 @@ The effects, and their settings:
 | Compressor  | above the threshold the level rises only 1/ratio as much: evens out a voice | `threshold_db`, `ratio`, `attack_ms`, `release_ms`, `makeup_db` |
 | Limiter     | never louder than the ceiling: protects ears and recordings         | `ceiling_db`, `release_ms`                               |
 | Noise gate  | silent while the sound stays under the threshold: hides a microphone's hiss between words | `threshold_db`, `release_ms`        |
+| Noise suppression | RNNoise, as in Mumble: a small neural network tells voice from noise (fans, keyboard, traffic) and keeps the voice, also while you speak. The original can be mixed back in | `amount` (percent) |
 | High-pass   | lets through what is above the cutoff, 12 dB per octave: takes away rumble and hum | `cutoff_hz`, `q` (resonance)              |
 | Low-pass    | lets through what is below the cutoff, 12 dB per octave: takes away hiss and harshness | `cutoff_hz`, `q`                      |
 | Equalizer   | lows (below 150 Hz), mids (around 1 kHz) and highs (above 5 kHz) up or down | `low_db`, `mid_db`, `high_db`                    |
@@ -75,7 +76,8 @@ The effects, and their settings:
 
 `mix` is how much of the processed sound replaces the original: at 0 the
 effect changes nothing. Apart from the echoes that Delay, Reverb and Chorus
-are for, effects add no delay to the audio.
+are for, effects add no delay to the audio, except Noise suppression: RNNoise
+hands back each 10 ms one block late, so it adds 10 ms.
 
 Wolfe takes audio from microphones and from its own speakers, and sends it to
 speakers and to its own microphones. It does not show applications and does
@@ -174,7 +176,7 @@ The window writes the same format, adding where each box is drawn. Comments
 | `virtual_mic`     | one of Wolfe's recording devices            | `name`   |
 | `input`           | a recording device                          | `device` |
 | `output`          | a playback device                           | `device` |
-| an effect         | `gain`, `pan`, `compressor`, `limiter`, `gate`, `highpass`, `lowpass`, `equalizer`, `delay`, `reverb`, `chorus`, `tremolo`, `distortion`, `bitcrusher` | its settings, by the names in the table above; one left out keeps its initial value |
+| an effect         | `gain`, `pan`, `compressor`, `limiter`, `gate`, `rnnoise`, `highpass`, `lowpass`, `equalizer`, `delay`, `reverb`, `chorus`, `tremolo`, `distortion`, `bitcrusher` | its settings, by the names in the table above; one left out keeps its initial value |
 
 `device` is `default`, or any part of the device name as `wolfe-cli devices`
 shows it. Devices that are missing are retried every second.
@@ -191,11 +193,10 @@ report shows `late` counts that keep growing.
 
 The console program also knows a few things the window does not offer:
 `loopback` nodes (everything played on a playback device, `device`), `app`
-nodes (everything one application plays, `process`), `mix` and `rnnoise`
-(noise suppression for voice) effects, and `gain_db` on a link. In a file the
-window loads, `mix` and `rnnoise` nodes become gains at 0 dB (so that their
-links stay), links lose their gain, and the rest is left out; its log says
-what was changed.
+nodes (everything one application plays, `process`), `mix` (a junction), and
+`gain_db` on a link. In a file the window loads, `mix` nodes become gains at
+0 dB (so that their links stay), links lose their gain, and the rest is left
+out; its log says what was changed.
 
 ## Reading the report
 

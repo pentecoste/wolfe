@@ -410,8 +410,8 @@ void testOldFile() {
         if (node.id == "fx|1") denoise = &node;
     }
     expect(junction && junction->kind == NodeKind::Effect && junction->parameters[0] == 0.0f, "a junction is a gain at 0 dB");
-    expect(denoise && denoise->kind == NodeKind::Effect && problems.find("noise suppression") != std::string::npos,
-           "so is noise suppression, so that its links stay; the user is told");
+    expect(denoise && denoise->type == "rnnoise" && denoise->parameters.size() == 1 && denoise->parameters[0] == 100.0f,
+           "noise suppression is noise suppression, at full amount");
     expect(controller.nodes().size() == 4 && controller.links().size() == 3, "the rest is there");
     const Node* mic = byLabel(controller, kMic);
     expect(mic && mic->x < junction->x, "a box with no place of its own is laid out with the others");

@@ -215,10 +215,6 @@ std::string Controller::adopt(const GraphDescription& description) {
             node.detail = node.kind == NodeKind::WolfeSpeaker ? "Wolfe speaker" : "Wolfe microphone";
         } else if (const EffectType* type = findEffectType(in.type)) {
             // A junction of the earlier versions is a gain that changes nothing.
-            // So is, from now on, noise suppression: its links are kept that way.
-            if (in.type == "rnnoise") {
-                problems += "\"" + in.id + "\" was noise suppression, which Wolfe no longer has: it is a gain at 0 dB now.\n";
-            }
             if (!type->offered) type = findEffectType("gain");
             node.kind = NodeKind::Effect;
             node.type = type->type;

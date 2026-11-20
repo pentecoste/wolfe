@@ -243,70 +243,6 @@ void testLateBlocks() {
     expect(longer.stats.lateFrames == result.stats.lateFrames, "after that, late blocks no longer cost audio");
 }
 
-// The "rnnoise" node must hand RNNoise the same numbers as calling the library
-// directly on 16-bit-scaled mono, and return its answer on both channels.
-void testRnnoiseNode() {
-    printf("rnnoise node against the library called directly\n");
-    std::shared_ptr<Effect> node = createEffect("rnnoise");
-    DenoiseState* direct = rnnoise_create(nullptr);
-    std::mt19937 random(777);
-    std::uniform_real_distribution<float> noise(-0.1f, 0.1f);
-
-    double largestDifference = 0, energyIn = 0, energyOut = 0;
-    for (int frame = 0; frame < 300; frame++) {
-        float stereo[kQuantum * kChannels], mono[kQuantum];
-        for (int i = 0; i < kQuantum; i++) {
-            // A tone under noise, different on the two sides, so that folding to mono matters.
-            float tone = 0.2f * (float)std::sin(2.0 * kPi * 220.0 * (frame * kQuantum + i) / kSampleRate);
-            float left = tone + noise(random), right = tone + noise(random);
-            stereo[i * 2] = left;
-            stereo[i * 2 + 1] = right;
-            mono[i] = (left + right) * 0.5f * 32768.0f;
-            energyIn += (double)mono[i] * mono[i];
-        }
-        node->process(stereo);
-        rnnoise_process_frame(direct, mono, mono);
-        for (int i = 0; i < kQuantum; i++) {
-            energyOut += (double)mono[i] * mono[i];
-            largestDifference = std::max(largestDifference, (double)std::fabs(stereo[i * 2] - mono[i] / 32768.0f));
-            largestDifference = std::max(largestDifference, (double)std::fabs(stereo[i * 2 + 1] - mono[i] / 32768.0f));
-        }
-    }
-    rnnoise_destroy(direct);
-    printf("    largest difference %.2e, level change %.1f dB\n", largestDifference,
-           10.0 * std::log10(energyOut / energyIn));
-    expect(largestDifference < 1e-6, "same output as the library");
-    expect(energyOut < energyIn, "it does remove something");
-}
-
-// The "gain" node multiplies by its gain; a new gain is reached over one
-// cycle, without a jump that would click.
-void testGainNode() {
-    printf("gain node\n");
-    std::shared_ptr<Effect> node = createEffect("gain");
-    float stereo[kQuantum * kChannels];
-    auto fill = [&] {
-        for (int i = 0; i < kQuantum * kChannels; i++) stereo[i] = 0.5f;
-    };
-    fill();
-    node->process(stereo);
-    expect(stereo[0] == 0.5f && stereo[kQuantum * kChannels - 1] == 0.5f, "at first it changes nothing");
-
-    node->setParameter(0, (float)(20.0 * std::log10(0.25)));  // in dB
-    fill();
-    node->process(stereo);
-    float largestStep = 0.0f;
-    for (int i = 1; i < kQuantum; i++) largestStep = std::max(largestStep, std::fabs(stereo[i * 2] - stereo[(i - 1) * 2]));
-    expect(stereo[0] < 0.5f && stereo[0] > 0.49f, "a new gain starts from the old one");
-    expect(std::fabs(stereo[(kQuantum - 1) * 2] - 0.125f) < 1e-5f && largestStep < 0.001f,
-           "and arrives at the end of the cycle, a little at a time");
-    expect(stereo[(kQuantum - 1) * 2 + 1] == stereo[(kQuantum - 1) * 2], "on both channels");
-
-    fill();
-    node->process(stereo);
-    expect(std::fabs(stereo[0] - 0.125f) < 1e-5f && stereo[kQuantum * kChannels - 1] == stereo[0], "then it stays there");
-}
-
 // --- the other effects --------------------------------------------------------
 
 using Signal = std::function<float(int frame)>;  // the same on both sides
@@ -352,6 +288,99 @@ double peakOf(const std::vector<float>& samples, double from) {
     double peak = 0;
     for (size_t i = (size_t)(from * kSampleRate); i < samples.size(); i++) peak = std::max(peak, (double)std::fabs(samples[i]));
     return peak;
+}
+
+// The "rnnoise" node must hand RNNoise the same numbers as calling the library
+// directly on 16-bit-scaled audio, each side by itself, and take the work only
+// once when the two sides are the same.
+void testRnnoiseNode() {
+    printf("rnnoise node against the library called directly\n");
+    std::mt19937 random(777);
+    std::uniform_real_distribution<float> noise(-0.1f, 0.1f);
+    auto compare = [&](bool sidesDiffer) {
+        std::shared_ptr<Effect> node = createEffect("rnnoise");
+        DenoiseState* direct[2] = {rnnoise_create(nullptr), rnnoise_create(nullptr)};
+        double largestDifference = 0;
+        for (int frame = 0; frame < 300; frame++) {
+            float stereo[kQuantum * kChannels], side[2][kQuantum];
+            for (int i = 0; i < kQuantum; i++) {
+                const float tone = 0.2f * (float)std::sin(2.0 * kPi * 220.0 * (frame * kQuantum + i) / kSampleRate);
+                const float left = tone + noise(random), right = sidesDiffer ? tone + noise(random) : left;
+                stereo[i * 2] = left;
+                stereo[i * 2 + 1] = right;
+                side[0][i] = left * 32768.0f;
+                side[1][i] = right * 32768.0f;
+            }
+            node->process(stereo);
+            for (int s = 0; s < 2; s++) {
+                rnnoise_process_frame(direct[s], side[s], side[s]);
+                for (int i = 0; i < kQuantum; i++) {
+                    largestDifference = std::max(largestDifference, (double)std::fabs(stereo[i * 2 + s] - side[s][i] / 32768.0f));
+                }
+            }
+        }
+        for (DenoiseState* state : direct) rnnoise_destroy(state);
+        return largestDifference;
+    };
+    const double mono = compare(false), stereo = compare(true);
+    printf("    largest difference: %.2e with the same on both sides, %.2e with different sides\n", mono, stereo);
+    expect(mono < 1e-6 && stereo < 1e-6, "same output as the library, each side cleaned by itself");
+
+    // At 0% the original comes out, one frame late like the cleaned sound.
+    std::shared_ptr<Effect> off = createEffect("rnnoise");
+    set(*off, "rnnoise", "amount", 0);
+    const std::vector<float> out = run(*off, 0.1, sine(300, 0.3f));
+    bool late = true;
+    for (size_t i = kQuantum; i < out.size(); i++) late &= std::fabs(out[i] - sine(300, 0.3f)((int)(i - kQuantum))) < 1e-6f;
+    expect(late, "at 0% the original comes out, one frame late, lined up with the cleaned sound");
+
+    // A microphone's hiss when nobody speaks is taken away; a buzz with
+    // harmonics, as a voice has, comes through. (On white hiss alone RNNoise
+    // is uneven from one level to another: it learnt from real noises.)
+    std::normal_distribution<float> hiss(0.0f, 0.001f);  // -60 dB
+    std::shared_ptr<Effect> node = createEffect("rnnoise");
+    const std::vector<float> cleaned = run(*node, 3.0, [&](int) { return hiss(random); });
+    const double after = rmsDb(cleaned, 1.0);
+    const Signal buzz = [&](int frame) {
+        double voice = 0;
+        for (int h = 1; h <= 12; h++) voice += std::sin(2.0 * kPi * 140.0 * h * frame / kSampleRate + h) / h;
+        return 0.1f * (float)voice + hiss(random);
+    };
+    node = createEffect("rnnoise");
+    const double voiceIn = rmsDb(run(*createEffect("gain"), 3.0, buzz), 1.0);
+    const double voiceOut = rmsDb(run(*node, 3.0, buzz), 1.0);
+    printf("    hiss at -60 dB comes out at %.0f dB; a voice-like buzz goes in at %.1f dB, out at %.1f dB\n", after,
+           voiceIn, voiceOut);
+    expect(after < -75.0, "a microphone's hiss is taken away");
+    expect(std::fabs(voiceOut - voiceIn) < 1.5, "a voice comes through");
+}
+
+// The "gain" node multiplies by its gain; a new gain is reached over one
+// cycle, without a jump that would click.
+void testGainNode() {
+    printf("gain node\n");
+    std::shared_ptr<Effect> node = createEffect("gain");
+    float stereo[kQuantum * kChannels];
+    auto fill = [&] {
+        for (int i = 0; i < kQuantum * kChannels; i++) stereo[i] = 0.5f;
+    };
+    fill();
+    node->process(stereo);
+    expect(stereo[0] == 0.5f && stereo[kQuantum * kChannels - 1] == 0.5f, "at first it changes nothing");
+
+    node->setParameter(0, (float)(20.0 * std::log10(0.25)));  // in dB
+    fill();
+    node->process(stereo);
+    float largestStep = 0.0f;
+    for (int i = 1; i < kQuantum; i++) largestStep = std::max(largestStep, std::fabs(stereo[i * 2] - stereo[(i - 1) * 2]));
+    expect(stereo[0] < 0.5f && stereo[0] > 0.49f, "a new gain starts from the old one");
+    expect(std::fabs(stereo[(kQuantum - 1) * 2] - 0.125f) < 1e-5f && largestStep < 0.001f,
+           "and arrives at the end of the cycle, a little at a time");
+    expect(stereo[(kQuantum - 1) * 2 + 1] == stereo[(kQuantum - 1) * 2], "on both channels");
+
+    fill();
+    node->process(stereo);
+    expect(std::fabs(stereo[0] - 0.125f) < 1e-5f && stereo[kQuantum * kChannels - 1] == stereo[0], "then it stays there");
 }
 
 // Every effect the editor offers, with its settings all at the bottom, all at
