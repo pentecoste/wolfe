@@ -31,6 +31,7 @@ std::string optionalString(const Json& object, const char* key) {
 
 bool isDeviceType(const std::string& type) { return type == "input" || type == "loopback" || type == "output"; }
 bool isAppType(const std::string& type) { return type == "app"; }
+bool isVirtualType(const std::string& type) { return type == "virtual_speaker" || type == "virtual_mic"; }
 
 GraphDescription loadDescription(const std::string& path) {
     std::ifstream file(std::filesystem::path(toWide(path)), std::ios::binary);
@@ -60,6 +61,10 @@ GraphDescription loadDescription(const std::string& path) {
         node.type = requireString(item, "type", where);
         if (isDeviceType(node.type)) node.target = requireString(item, "device", where);
         else if (isAppType(node.type)) node.target = requireString(item, "process", where);
+        else if (isVirtualType(node.type)) {
+            node.target = requireString(item, "name", where);
+            node.serial = optionalString(item, "serial");
+        }
         node.label = optionalString(item, "label");
         if (item.contains("x") && item.contains("y") && item["x"].is_number() && item["y"].is_number()) {
             node.hasPosition = true;
@@ -93,6 +98,10 @@ void saveDescription(const std::string& path, const GraphDescription& descriptio
         item["type"] = node.type;
         if (isDeviceType(node.type)) item["device"] = node.target;
         else if (isAppType(node.type)) item["process"] = node.target;
+        else if (isVirtualType(node.type)) {
+            item["name"] = node.target;
+            if (!node.serial.empty()) item["serial"] = node.serial;
+        }
         if (!node.label.empty()) item["label"] = node.label;
         if (node.hasPosition) {
             item["x"] = std::round(node.x);
@@ -133,7 +142,15 @@ void addNode(const NodeDescription& node, Graph& graph) {
     else if (node.type == "loopback") graph.addInput(node.id, {InputKind::Loopback, node.target});
     else if (node.type == "app") graph.addInput(node.id, {InputKind::Process, node.target});
     else if (node.type == "output") graph.addOutput(node.id, node.target);
-    else graph.addEffect(node.id, node.type);
+    else if (isVirtualType(node.type)) {
+        VirtualDeviceSpec spec;
+        spec.recording = node.type == "virtual_mic";
+        spec.name = node.target;
+        spec.serial = node.serial.empty() ? serialFor(node.id) : node.serial;
+        graph.addVirtualDevice(node.id, spec);
+    } else {
+        graph.addEffect(node.id, node.type);
+    }
 }
 
 void buildGraph(const GraphDescription& description, Graph& graph) {
@@ -145,7 +162,7 @@ void buildGraph(const GraphDescription& description, Graph& graph) {
         linked.insert(link.to);
     }
     for (const NodeDescription& node : description.nodes) {
-        if (linked.count(node.id)) addNode(node, graph);
+        if (linked.count(node.id) || isVirtualType(node.type)) addNode(node, graph);
     }
     for (const LinkDescription& link : description.links) {
         graph.addLink(link.from, link.to, (float)std::pow(10.0, link.gainDb / 20.0));

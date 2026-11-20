@@ -49,10 +49,12 @@ add_library(wolfe_engine STATIC
     src/output.cpp
     src/process_finder.cpp
     src/source_buffer.cpp
-    src/source_reader.cpp)
+    src/source_reader.cpp
+    src/usbip_server.cpp
+    src/virtual_devices.cpp)
 target_include_directories(wolfe_engine PUBLIC src third_party)
 target_compile_options(wolfe_engine PRIVATE -Wall -Wextra)
-target_link_libraries(wolfe_engine PUBLIC rnnoise ole32 mmdevapi avrt)
+target_link_libraries(wolfe_engine PUBLIC rnnoise ole32 mmdevapi avrt ws2_32)
 
 # What the graphical editor does, without the drawing.
 add_library(wolfe_app STATIC src/app/controller.cpp)

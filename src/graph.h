@@ -3,6 +3,7 @@
 #include "effect.h"
 #include "input.h"
 #include "output.h"
+#include "virtual_devices.h"
 
 #include <atomic>
 #include <map>
@@ -31,16 +32,18 @@ struct Plan {
     };
     struct Step {
         std::string nodeId;
-        std::shared_ptr<SourceReader> reader;  // set when the node is an input...
-        std::shared_ptr<Effect> effect;        // ...otherwise this is, with `feeds`
+        std::shared_ptr<SourceReader> reader;   // an input from a device on its own clock,
+        std::shared_ptr<VirtualDevice> device;  // or one of Wolfe's devices, on the graph's clock;
+        std::shared_ptr<Effect> effect;         // otherwise this is, with `feeds`
         std::vector<Feed> feeds;
-        std::vector<float> audio;              // this step's result for the current cycle
+        std::vector<float> audio;               // this step's result for the current cycle
     };
     struct Sink {
         std::string nodeId;
-        std::shared_ptr<SourceBuffer> feed;  // where its result goes, for the device to play
+        std::shared_ptr<SourceBuffer> feed;     // where its result goes, for a device to play,
+        std::shared_ptr<VirtualDevice> device;  // or for one of Wolfe's devices to take
         std::vector<Feed> feeds;
-        std::vector<int> inputs;             // the input steps that reach it, for reports
+        std::vector<int> inputs;                // the reader steps that reach it, for reports
     };
     std::vector<Step> steps;
     std::vector<Sink> sinks;
@@ -64,6 +67,10 @@ public:
     void addInput(const std::string& id, InputSpec spec);
     void addEffect(const std::string& id, const std::string& type);
     void addOutput(const std::string& id, const std::string& device);
+    // One of Wolfe's own devices, which Windows shows like any other: a
+    // speaker is an input of the graph, a microphone an output. It is added to
+    // Windows at once and taken away with the node.
+    void addVirtualDevice(const std::string& id, const VirtualDeviceSpec& spec);
 
     // Removes a node together with its links. A device is closed, an
     // application is no longer captured.
@@ -119,11 +126,13 @@ private:
     std::shared_ptr<Plan> plan() const;
 
     void cycleMain();
-    void runCycle(Plan& plan, double cycleTime, double endTime);
+    void runCycle(Plan& plan, int64_t cycle);
 
     std::map<std::string, std::unique_ptr<Input>> inputs_;
     std::map<std::string, std::string> effects_;  // id -> type
     std::map<std::string, OutputNode> outputs_;
+    std::map<std::string, std::shared_ptr<VirtualDevice>> virtuals_;
+    std::unique_ptr<VirtualDevices> virtualDevices_;  // made when the first one is added
     std::vector<std::shared_ptr<Link>> links_;
 
     double marginSeconds_ = 0.004;

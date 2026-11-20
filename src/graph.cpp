@@ -21,6 +21,8 @@ constexpr size_t kQuantumSamples = (size_t)kQuantum * kChannels;
 // A cycle this late means the computer was asleep or stopped in a debugger:
 // the graph jumps to the present instead of catching up.
 constexpr double kResyncSeconds = 0.2;
+// How far behind the present the graph reads Wolfe's own speakers.
+constexpr int64_t kSpeakerBehindFrames = kSampleRate * 2 / 1000;
 
 // Adds every feed, scaled by its link's gain, into `out`. A gain that changed
 // since the previous cycle is faded over the cycle to avoid a click.
@@ -53,6 +55,9 @@ Graph::Kind Graph::kindOf(const std::string& id) const {
     if (inputs_.count(id)) return Kind::Input;
     if (effects_.count(id)) return Kind::Effect;
     if (outputs_.count(id)) return Kind::Output;
+    if (auto found = virtuals_.find(id); found != virtuals_.end()) {
+        return found->second->spec().recording ? Kind::Output : Kind::Input;
+    }
     return Kind::None;
 }
 
@@ -85,6 +90,13 @@ void Graph::addOutput(const std::string& id, const std::string& device) {
     outputs_[id] = std::move(node);
 }
 
+void Graph::addVirtualDevice(const std::string& id, const VirtualDeviceSpec& spec) {
+    requireNewId(id);
+    if (spec.name.empty() || spec.serial.empty()) throw std::runtime_error("\"" + id + "\" needs a name and a serial");
+    if (!virtualDevices_) virtualDevices_ = std::make_unique<VirtualDevices>();
+    virtuals_[id] = virtualDevices_->add(spec);
+}
+
 void Graph::removeNode(const std::string& id) {
     if (kindOf(id) == Kind::None) return;
     links_.erase(std::remove_if(links_.begin(), links_.end(),
@@ -104,12 +116,19 @@ void Graph::removeNode(const std::string& id) {
         outputs_.erase(found);
     }
     effects_.erase(id);
+    std::shared_ptr<VirtualDevice> device;
+    if (auto found = virtuals_.find(id); found != virtuals_.end()) {
+        device = found->second;
+        virtuals_.erase(found);
+    }
     rebuildPlan();
+    if (device) virtualDevices_->remove(device);
 }
 
 std::string Graph::nodeStatus(const std::string& id) const {
     if (auto found = inputs_.find(id); found != inputs_.end()) return found->second->status();
     if (auto found = outputs_.find(id); found != outputs_.end()) return found->second.output->status();
+    if (auto found = virtuals_.find(id); found != virtuals_.end()) return found->second->status();
     if (effects_.count(id)) return "running";
     return {};
 }
@@ -117,6 +136,7 @@ std::string Graph::nodeStatus(const std::string& id) const {
 float Graph::takeNodePeak(const std::string& id) {
     if (auto found = inputs_.find(id); found != inputs_.end()) return found->second->buffer()->takePeak();
     if (auto found = outputs_.find(id); found != outputs_.end()) return found->second.output->takePeak();
+    if (auto found = virtuals_.find(id); found != virtuals_.end()) return found->second->timeline()->takePeak();
     return 0.0f;
 }
 
@@ -227,9 +247,12 @@ std::shared_ptr<Plan> Graph::buildPlan(const Plan* previous) const {
         const Plan::Step* old = oldStep(id);
 
         auto input = inputs_.find(id);
+        auto device = virtuals_.find(id);
         if (input != inputs_.end()) {
             step.reader = old && old->reader ? old->reader
                                              : std::make_shared<SourceReader>(input->second->buffer(), marginSeconds_);
+        } else if (device != virtuals_.end()) {
+            step.device = device->second;
         } else {
             step.effect = old && old->effect ? old->effect : createEffect(effects_.at(id));
             for (const auto& link : links_) {
@@ -245,7 +268,7 @@ std::shared_ptr<Plan> Graph::buildPlan(const Plan* previous) const {
         return stepOf[id];
     };
 
-    for (const auto& [id, output] : outputs_) {
+    auto addSink = [&](const std::string& id, std::shared_ptr<SourceBuffer> feed, std::shared_ptr<VirtualDevice> device) {
         const std::vector<Plan::Feed>* oldFeeds = nullptr;
         if (previous) {
             for (const Plan::Sink& sink : previous->sinks) {
@@ -254,13 +277,18 @@ std::shared_ptr<Plan> Graph::buildPlan(const Plan* previous) const {
         }
         Plan::Sink sink;
         sink.nodeId = id;
-        sink.feed = output.feed;
+        sink.feed = std::move(feed);
+        sink.device = std::move(device);
         for (const auto& link : links_) {
             if (link->to != id) continue;
             const int from = visit(link->from);
             sink.feeds.push_back({from, link, appliedGain(oldFeeds, link)});
         }
         plan->sinks.push_back(std::move(sink));
+    };
+    for (const auto& [id, output] : outputs_) addSink(id, output.feed, nullptr);
+    for (const auto& [id, device] : virtuals_) {
+        if (device->spec().recording) addSink(id, nullptr, device);
     }
 
     // Which inputs reach each output, by walking its feeds back.
@@ -339,19 +367,26 @@ void Graph::cycleMain() {
         }
         {
             std::lock_guard<std::mutex> lock(planMutex_);
-            if (plan_) runCycle(*plan_, end, end);
+            if (plan_) runCycle(*plan_, cycle);
         }
         cycle++;
     }
     CloseHandle(timer);
 }
 
-void Graph::runCycle(Plan& plan, double cycleTime, double endTime) {
+void Graph::runCycle(Plan& plan, int64_t cycle) {
+    const int64_t firstFrame = cycle * kQuantum;
+    const double endTime = (double)(cycle + 1) * kQuantumSeconds;
     const double now = nowSeconds();
     for (Plan::Step& step : plan.steps) {
         float* audio = step.audio.data();
         if (step.reader) {
-            step.reader->read(cycleTime, now, audio);
+            step.reader->read(endTime, now, audio);
+        } else if (step.device) {
+            // A speaker of Wolfe's is given its audio ahead of time, so the
+            // frames of this cycle are there already; a little is kept in hand
+            // for a request that comes in late.
+            step.device->timeline()->read(firstFrame - kSpeakerBehindFrames, kQuantum, audio);
         } else {
             std::memset(audio, 0, kQuantumSamples * sizeof(float));
             mixFeeds(plan, step.feeds, audio);
@@ -362,8 +397,12 @@ void Graph::runCycle(Plan& plan, double cycleTime, double endTime) {
     for (Plan::Sink& sink : plan.sinks) {
         std::memset(out, 0, sizeof(out));
         mixFeeds(plan, sink.feeds, out);
-        // On the graph's clock these frames end exactly now.
-        sink.feed->push(endTime, out, kQuantum);
+        if (sink.device) {
+            sink.device->timeline()->write(firstFrame, out, kQuantum);
+        } else {
+            // On the graph's clock these frames end exactly now.
+            sink.feed->push(endTime, out, kQuantum);
+        }
     }
 }
 
@@ -375,6 +414,13 @@ std::string Graph::report() {
         float peak = input->buffer()->takePeak();
         snprintf(line, sizeof(line), "  in  %-12s %-44s peak %6.1f dB\n", id.c_str(), input->status().c_str(),
                  peak > 0 ? 20.0 * log10(peak) : -120.0);
+        text += line;
+    }
+    for (auto& [id, device] : virtuals_) {
+        float peak = device->timeline()->takePeak();
+        snprintf(line, sizeof(line), "  %s %-12s Wolfe's %s \"%s\": %s  peak %6.1f dB\n",
+                 device->spec().recording ? "out" : "in ", id.c_str(), device->spec().recording ? "microphone" : "speaker",
+                 device->spec().name.c_str(), device->status().c_str(), peak > 0 ? 20.0 * log10(peak) : -120.0);
         text += line;
     }
     auto readerLine = [&](const std::string& name, const SourceReader::Stats& stats) {
