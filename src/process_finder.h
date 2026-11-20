@@ -66,6 +66,10 @@ struct AudioSession {
     ComPtr<IAudioMeterInformation> meter;  // the level of this stream alone
 };
 
+// The name a program gives itself ("Spotify", "Google Chrome"), read from
+// its executable; the file's name without ".exe" when it gives none.
+std::string programName(const std::string& exePath);
+
 // Every such stream on every device. Needs COM on the calling thread.
 std::vector<AudioSession> audioSessions();
 

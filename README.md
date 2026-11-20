@@ -87,7 +87,18 @@ computer is only opened while something is linked to it.
 `not plugged in` when the device is missing (the box stays, and works again
 when the device comes back). One of Wolfe's devices is `ready` once Windows
 has it, and a microphone of Wolfe's is `in use` while an application records
-from it. The bar is the level as Windows measures it (a recording device only
+from it.
+
+Under a device's name are the applications that are playing on it right now
+(a recording device: recording from it), by the name the program gives
+itself. Hovering the box lists also those that only have a silent stream open
+there, as many programs keep one. The Wolfe menu can leave the list out of
+the boxes; the tooltip always has it. Windows' own sounds and Wolfe itself
+are not listed. A program that listens to what is played on a device (a
+screen recorder, a game streaming host) is listed as playing there: Windows
+does not tell the two apart.
+
+The bar is the level as Windows measures it (a recording device only
 has a level while something records from it). A box with an orange outline is
 linked but not working: its text says why. When a link cannot be made, the
 reason appears next to the mouse.

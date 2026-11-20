@@ -265,6 +265,60 @@ void testWolfeDevices() {
     expect(reloaded.node(uid) == nullptr && reloaded.links().size() == 1, "removed, it takes its links with it");
 }
 
+void testApplications() {
+    printf("applications on each device\n");
+    const std::string document = tempFile("wolfe-test-apps.json");
+    {
+        Controller controller(document, false);
+        controller.apply(system());
+        std::string problem;
+        const int music = controller.addWolfeDevice(false, "Wolfe Music", 300, 100, &problem);
+        const int phones = controller.addDevice(false, "{fake-phones}", 700, 100);
+        const int mic = controller.addDevice(true, "{fake-mic}", 100, 100);
+        const int gain = controller.addGain(400, 300);
+
+        Discovery discovery = system();
+        discovery.outputs.push_back({"Speakers (Wolfe Music)", L"{wolfe-music}", false, controller.node(music)->serial});
+        // A player and a browser on Wolfe's speaker, the browser with two
+        // streams of which one is silent; a chat program that records from the
+        // microphone and keeps a silent stream on the headphones; a game on
+        // the headphones.
+        discovery.sessions.push_back({"Player", "{wolfe-music}", false, true});
+        discovery.sessions.push_back({"Browser", "{wolfe-music}", false, false});
+        discovery.sessions.push_back({"Browser", "{wolfe-music}", false, true});
+        discovery.sessions.push_back({"Chat", "{fake-mic}", true, true});
+        discovery.sessions.push_back({"Chat", "{fake-phones}", false, false});
+        discovery.sessions.push_back({"Game", "{fake-phones}", false, true});
+        controller.apply(discovery);
+
+        const std::vector<AppUse>& onMusic = controller.node(music)->apps;
+        expect(onMusic.size() == 2 && onMusic[0].name == "Browser" && onMusic[0].active && onMusic[1].name == "Player",
+               "Wolfe's speaker: each program once, active if any of its streams is");
+        const std::vector<AppUse>& onPhones = controller.node(phones)->apps;
+        expect(onPhones.size() == 2 && onPhones[0].name == "Game" && onPhones[1].name == "Chat" && !onPhones[1].active,
+               "the headphones: those with audio flowing first, a silent stream after");
+        const std::vector<AppUse>& onMic = controller.node(mic)->apps;
+        expect(onMic.size() == 1 && onMic[0].name == "Chat", "the microphone: who records from it, not who plays");
+        expect(controller.node(gain)->apps.empty(), "a gain has none");
+        const std::string tooltip = controller.describeNode(phones);
+        expect(tooltip.find("Game  (playing)") != std::string::npos &&
+                   tooltip.find("Chat  (stream open") != std::string::npos,
+               "the tooltip lists them all, saying which are silent");
+
+        controller.apply(system());
+        expect(controller.node(phones)->apps.empty(), "an application that closes its stream goes away");
+        expect(controller.describeNode(phones).find("No application plays on it") != std::string::npos,
+               "and the tooltip says nobody is there");
+
+        expect(controller.showApps(), "boxes list applications unless told not to");
+        controller.setShowApps(false);
+        controller.save();
+    }
+    Controller reloaded(document, false);
+    reloaded.load();
+    expect(!reloaded.showApps(), "not listing them is remembered");
+}
+
 void testLoops() {
     printf("loops through a virtual cable\n");
     const std::string document = tempFile("wolfe-test-loops.json");
@@ -330,6 +384,7 @@ int main() {
     testGains();
     testHandWrittenFile();
     testWolfeDevices();
+    testApplications();
     testLoops();
     testOldFile();
     printf(g_failures ? "\n%d check(s) FAILED\n" : "\nall checks passed\n", g_failures);

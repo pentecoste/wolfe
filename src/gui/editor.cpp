@@ -77,6 +77,19 @@ void drawMeter(float level, float width, float height, bool enabled) {
     draw->AddRectFilled(from, ImVec2(from.x + (to.x - from.x) * filled, to.y), colour, height * 0.5f);
 }
 
+// "Spotify, Firefox +2": as many names as fit in `width`, and how many more there are.
+std::string namesThatFit(const std::vector<std::string>& names, float width) {
+    if (names.empty()) return {};
+    for (size_t shown = names.size(); shown >= 1; shown--) {
+        std::string text;
+        for (size_t i = 0; i < shown; i++) text += (i ? ", " : "") + names[i];
+        if (shown < names.size()) text += " +" + std::to_string(names.size() - shown);
+        if (ImGui::CalcTextSize(text.c_str()).x <= width) return text;
+    }
+    const std::string more = names.size() > 1 ? " +" + std::to_string(names.size() - 1) : "";
+    return fit(names[0], width - ImGui::CalcTextSize(more.c_str()).x) + more;
+}
+
 // Every word of the query is somewhere in the choice's words.
 bool matches(const std::string& words, const char* query) {
     std::istringstream parts(toLower(query));
@@ -167,6 +180,12 @@ void Editor::drawMenuBar() {
         if (ImGui::MenuItem("Start with Windows", nullptr, autostart)) setStartsWithWindows(!autostart);
         const bool tray = controller_.closeToTray();
         if (ImGui::MenuItem("Keep running when the window is closed", nullptr, tray)) controller_.setCloseToTray(!tray);
+        const bool apps = controller_.showApps();
+        if (ImGui::MenuItem("Show applications in boxes", nullptr, apps)) controller_.setShowApps(!apps);
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Under a device's name, the applications playing on it or recording from it.\n"
+                              "Hovering a box lists them either way.");
+        }
         ImGui::Separator();
         if (ImGui::MenuItem("Exit")) exitRequested = true;
         ImGui::EndMenu();
@@ -474,6 +493,19 @@ void Editor::drawNode(const Node& node) {
     ImGui::TextUnformatted(fit(title, width).c_str());
     ImNodes::EndNodeTitleBar();
     if (!second.empty()) ImGui::TextUnformatted(fit(second, width).c_str());
+
+    // The applications that have audio flowing on its device right now (the
+    // tooltip lists the others too). The line is there even when there are
+    // none, so that the box does not change size as they come and go.
+    if (controller_.showApps() && node.kind != NodeKind::Gain) {
+        std::vector<std::string> names;
+        for (const AppUse& app : node.apps) {
+            if (app.active) names.push_back(app.name);
+        }
+        const bool recording = node.kind == NodeKind::Input || node.kind == NodeKind::WolfeMic;
+        if (names.empty()) ImGui::TextDisabled("%s", recording ? "no app recording" : "no app playing");
+        else ImGui::TextColored(ImVec4(0.55f, 0.70f, 0.88f, 1.0f), "%s", namesThatFit(names, width).c_str());
+    }
 
     const float spacing = ImGui::GetStyle().ItemSpacing.x;
     if (node.kind == NodeKind::Gain) {

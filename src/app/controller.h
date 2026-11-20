@@ -23,6 +23,13 @@ enum class NodeKind {
     WolfeMic,      // sink: one of Wolfe's own recording devices; applications that record from it hear it
 };
 
+// An application that has a stream open on a node's device: one that plays
+// on it, or (a recording device) one that records from it.
+struct AppUse {
+    std::string name;     // as the program calls itself: "Spotify", "Google Chrome"
+    bool active = false;  // audio is flowing, as opposed to a stream that is merely open
+};
+
 // A box on the canvas. Every box is one the user made.
 struct Node {
     int uid = 0;          // number used by the canvas; changes from one run to the next
@@ -44,6 +51,9 @@ struct Node {
     bool healthy = false;   // in the engine and doing its job
     std::string status;     // what the engine says about it
     float level = 0.0f;     // recent peak, 0..1, falling back on its own
+    // Devices: the applications using it, those with audio flowing first
+    // (Wolfe itself left out). Known only while somebody looks at the canvas.
+    std::vector<AppUse> apps;
 
     bool hasPosition = false;
     float x = 0, y = 0;
@@ -62,9 +72,18 @@ struct Connection {
 };
 
 // The devices on the computer at one moment, Wolfe's own included (they
-// have a wolfeSerial).
+// have a wolfeSerial), and the applications using them.
 struct Discovery {
     std::vector<DeviceInfo> inputs, outputs;
+
+    // A stream an application has open on a device.
+    struct Session {
+        std::string app;     // the program's name
+        std::string device;  // the device's id
+        bool recording = false;
+        bool active = false;
+    };
+    std::vector<Session> sessions;
 };
 
 // Everything the graphical editor does, without any drawing: the boxes and
@@ -126,6 +145,9 @@ public:
 
     bool closeToTray() const { return closeToTray_; }
     void setCloseToTray(bool value);
+    // Whether boxes list the applications that use their device (tooltips always do).
+    bool showApps() const { return showApps_; }
+    void setShowApps(bool value);
 
     // While nobody is looking at the canvas the system is looked at less often.
     void setWatched(bool someoneIsLooking);
@@ -159,6 +181,7 @@ private:
     int nextUid_ = 1;
     double marginMs_ = 4.0;
     bool closeToTray_ = true;
+    bool showApps_ = true;
 
     bool dirty_ = false;
     double dirtySince_ = 0;

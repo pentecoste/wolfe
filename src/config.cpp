@@ -52,6 +52,7 @@ GraphDescription loadDescription(const std::string& path) {
     if (root.contains("close_to_tray") && root["close_to_tray"].is_boolean()) {
         description.closeToTray = root["close_to_tray"].get<bool>();
     }
+    if (root.contains("show_apps") && root["show_apps"].is_boolean()) description.showApps = root["show_apps"].get<bool>();
 
     for (const Json& item : root.value("nodes", Json::array())) {
         NodeDescription node;
@@ -91,6 +92,7 @@ void saveDescription(const std::string& path, const GraphDescription& descriptio
     Json root = Json::object();
     root["margin_ms"] = description.marginMs;
     root["close_to_tray"] = description.closeToTray;
+    root["show_apps"] = description.showApps;
 
     Json nodes = Json::array();
     for (const NodeDescription& node : description.nodes) {

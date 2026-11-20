@@ -1,5 +1,6 @@
 #include "controller.h"
 
+#include "process_finder.h"
 #include "virtual_devices.h"
 
 #include <algorithm>
@@ -137,6 +138,7 @@ void Controller::save() {
     GraphDescription description;
     description.marginMs = marginMs_;
     description.closeToTray = closeToTray_;
+    description.showApps = showApps_;
     for (const Node& node : nodes_) {
         NodeDescription out;
         out.id = node.id;
@@ -174,6 +176,7 @@ std::string Controller::adopt(const GraphDescription& description) {
     clear();
     marginMs_ = description.marginMs;
     closeToTray_ = description.closeToTray;
+    showApps_ = description.showApps;
     graph_.setMarginMs(marginMs_);
 
     std::string problems;
@@ -267,6 +270,12 @@ void Controller::setWatched(bool someoneIsLooking) {
 void Controller::setCloseToTray(bool value) {
     if (closeToTray_ == value) return;
     closeToTray_ = value;
+    markDirty();
+}
+
+void Controller::setShowApps(bool value) {
+    if (showApps_ == value) return;
+    showApps_ = value;
     markDirty();
 }
 
@@ -577,6 +586,27 @@ void Controller::apply(const Discovery& discovery) {
     devices_ = discovery;
     syncDevices(discovery.inputs, NodeKind::Input);
     syncDevices(discovery.outputs, NodeKind::Output);
+
+    // The applications on each device: on a playback device those that play,
+    // on a recording device those that record. One entry per program, with
+    // audio flowing if any of its streams has it; those with audio first.
+    for (Node& node : nodes_) {
+        node.apps.clear();
+        if (node.kind == NodeKind::Gain) continue;
+        const std::string device = node.isWolfeDevice() ? node.endpoint : node.resolved ? node.target : std::string();
+        const bool recording = node.kind == NodeKind::Input || node.kind == NodeKind::WolfeMic;
+        if (device.empty()) continue;
+        for (const Discovery::Session& session : discovery.sessions) {
+            if (session.device != device || session.recording != recording) continue;
+            auto same = std::find_if(node.apps.begin(), node.apps.end(), [&](const AppUse& app) { return app.name == session.app; });
+            if (same == node.apps.end()) node.apps.push_back({session.app, session.active});
+            else same->active |= session.active;
+        }
+        std::stable_sort(node.apps.begin(), node.apps.end(), [](const AppUse& a, const AppUse& b) {
+            if (a.active != b.active) return a.active;
+            return toLower(a.name) < toLower(b.name);
+        });
+    }
 }
 
 void Controller::update(double now) {
@@ -624,6 +654,7 @@ void Controller::watchMain() {
     // The level meters found at the last look; they are read many times a second in between.
     std::vector<DeviceMeter> meters;
     double nextLook = 0.0;
+    std::map<std::string, std::string> programNames;  // by executable path: reading one opens the file
 
     std::unique_lock<std::mutex> lock(watchMutex_);
     while (!stopWatching_) {
@@ -637,7 +668,20 @@ void Controller::watchMain() {
             try {
                 discovery.inputs = listDevices(eCapture);
                 discovery.outputs = listDevices(eRender);
-                if (metering) meters = deviceMeters();
+                if (metering) {
+                    meters = deviceMeters();
+                    // Who uses which device, while somebody can see it. Wolfe's
+                    // own streams are left out: its links already say the same.
+                    ProcessSnapshot snapshot;
+                    for (const AudioSession& session : audioSessions()) {
+                        if (session.pid == GetCurrentProcessId()) continue;
+                        const std::string& path = snapshot.path(session.pid);
+                        if (path.empty()) continue;  // a process of the system's
+                        auto name = programNames.find(path);
+                        if (name == programNames.end()) name = programNames.emplace(path, programName(path)).first;
+                        discovery.sessions.push_back({name->second, toUtf8(session.device), session.recording, session.active});
+                    }
+                }
             } catch (const std::exception& error) {
                 logLine("looking at the system failed: %s", error.what());
             }
@@ -697,6 +741,18 @@ std::string Controller::describeNode(int nodeUid) {
                      "Drag the value left or right, or double-click it to type one.",
                      node.gainDb);
             return line;
+    }
+    if (node.present) {
+        const bool recording = node.kind == NodeKind::Input || node.kind == NodeKind::WolfeMic;
+        if (node.apps.empty()) {
+            text += recording ? "No application records from it.\n" : "No application plays on it.\n";
+        } else {
+            text += recording ? "Recorded from by:\n" : "Played on by:\n";
+            for (const AppUse& app : node.apps) {
+                text += "    " + app.name;
+                text += app.active ? (recording ? "  (recording)\n" : "  (playing)\n") : "  (stream open, nothing flowing)\n";
+            }
+        }
     }
     if (node.isDevice() && !node.present) text += "Not plugged in.\n";
     if (node.isWolfeDevice() && !node.present && node.healthy) text += "Windows does not have it yet.\n";

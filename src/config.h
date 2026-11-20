@@ -31,6 +31,7 @@ struct LinkDescription {
 struct GraphDescription {
     double marginMs = 4.0;
     bool closeToTray = true;  // graphical editor: closing the window keeps it running
+    bool showApps = true;     // graphical editor: boxes list the applications that use their device
     std::vector<NodeDescription> nodes;
     std::vector<LinkDescription> links;
 };

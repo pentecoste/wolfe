@@ -6,6 +6,7 @@
 #include <audiopolicy.h>
 #include <mmdeviceapi.h>
 #include <tlhelp32.h>
+#include <winver.h>
 
 #include <algorithm>
 #include <set>
@@ -160,6 +161,39 @@ std::vector<AudioSession> audioSessions() {
         }
     }
     return result;
+}
+
+std::string programName(const std::string& exePath) {
+    const std::wstring path = toWide(exePath);
+    std::string name;
+    DWORD ignored = 0;
+    const DWORD size = GetFileVersionInfoSizeW(path.c_str(), &ignored);
+    if (size > 0) {
+        std::vector<char> data(size);
+        if (GetFileVersionInfoW(path.c_str(), 0, size, data.data())) {
+            // The description in the first language the file has.
+            struct Translation {
+                WORD language, codePage;
+            };
+            Translation* translations = nullptr;
+            UINT length = 0;
+            if (VerQueryValueW(data.data(), L"\\VarFileInfo\\Translation", (void**)&translations, &length) &&
+                length >= sizeof(Translation)) {
+                wchar_t key[64];
+                swprintf(key, 64, L"\\StringFileInfo\\%04x%04x\\FileDescription", translations[0].language,
+                         translations[0].codePage);
+                wchar_t* text = nullptr;
+                UINT chars = 0;
+                if (VerQueryValueW(data.data(), key, (void**)&text, &chars) && text && chars > 1) name = toUtf8(text);
+            }
+        }
+    }
+    while (!name.empty() && (name.back() == ' ' || name.back() == '.')) name.pop_back();
+    if (!name.empty()) return name;
+    size_t slash = exePath.find_last_of('\\');
+    name = slash == std::string::npos ? exePath : exePath.substr(slash + 1);
+    if (name.size() > 4 && toLower(name.substr(name.size() - 4)) == ".exe") name.resize(name.size() - 4);
+    return name;
 }
 
 std::vector<DWORD> processesPlayingAudio() {
