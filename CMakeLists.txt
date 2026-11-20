@@ -38,14 +38,12 @@ target_link_libraries(imgui PUBLIC d3d11 dxgi d3dcompiler dwmapi gdi32 imm32)
 
 # The audio engine: devices, applications, effects, drift compensation.
 add_library(wolfe_engine STATIC
-    src/app_devices.cpp
     src/common.cpp
     src/config.cpp
     src/devices.cpp
     src/effect.cpp
     src/graph.cpp
     src/input.cpp
-    src/listening.cpp
     src/output.cpp
     src/process_finder.cpp
     src/source_buffer.cpp

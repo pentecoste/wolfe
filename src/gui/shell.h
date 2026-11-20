@@ -15,6 +15,9 @@ std::string logFilePath();
 bool startsWithWindows();
 void setStartsWithWindows(bool enabled);
 
+// Windows' settings page where each application is given its devices.
+void openVolumeMixer();
+
 // The standard "open file" window; empty when the user cancels.
 std::string askForGraphFile(HWND owner);
 

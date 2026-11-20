@@ -106,9 +106,10 @@ public:
     }
 
     std::string status() const override {
+        // (A speaker streams whenever Wolfe listens to it, so only a
+        // microphone can tell from its stream whether it is in use.)
         if (usb_->connected) {
-            if (!usb_->streaming) return "ready: Windows has it, nothing is using it";
-            return spec_.recording ? "an application is recording from it" : "an application is playing on it";
+            return spec_.recording && usb_->streaming ? "ready: an application is recording from it" : "ready";
         }
         std::lock_guard<std::mutex> lock(mutex_);
         return problem_.empty() ? "being added to Windows" : problem_;
@@ -236,10 +237,12 @@ struct VirtualDevices::Impl {
     }
 };
 
-VirtualDevices::VirtualDevices(std::shared_ptr<const GraphClock> clock, int port) : impl_(std::make_unique<Impl>()) {
+VirtualDevices::VirtualDevices(std::shared_ptr<const GraphClock> clock, int port, bool offer)
+    : impl_(std::make_unique<Impl>()) {
     impl_->clock = std::move(clock);
     impl_->port = port;
-    if (!impl_->server.start(port, &impl_->serverProblem)) logLine("Wolfe's devices: %s", impl_->serverProblem.c_str());
+    if (!offer) impl_->serverProblem = "offering them to Windows is switched off";
+    else if (!impl_->server.start(port, &impl_->serverProblem)) logLine("Wolfe's devices: %s", impl_->serverProblem.c_str());
     impl_->keeper = std::thread([this] { impl_->keeperMain(); });
 }
 

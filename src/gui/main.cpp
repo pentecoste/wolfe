@@ -153,13 +153,8 @@ LRESULT CALLBACK windowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
             PostQuitMessage(0);
             return 0;
         case WM_ENDSESSION:
-            // Windows is shutting down and may not leave time for the ordinary
-            // way out. Applications kept off every device stay that way only
-            // if Wolfe will be there again at the next start to carry them.
-            if (wParam && g_controller) {
-                g_controller->save();
-                if (!startsWithWindows()) g_controller->giveBackParked();
-            }
+            // Windows is shutting down and may not leave time for the ordinary way out.
+            if (wParam && g_controller) g_controller->save();
             return 0;
         case kShowMessage:
             showWindow(window);

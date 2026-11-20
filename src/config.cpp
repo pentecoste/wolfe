@@ -52,7 +52,6 @@ GraphDescription loadDescription(const std::string& path) {
     if (root.contains("close_to_tray") && root["close_to_tray"].is_boolean()) {
         description.closeToTray = root["close_to_tray"].get<bool>();
     }
-    description.silentDevice = optionalString(root, "silent_device");
 
     for (const Json& item : root.value("nodes", Json::array())) {
         NodeDescription node;
@@ -71,7 +70,6 @@ GraphDescription loadDescription(const std::string& path) {
             node.x = item["x"].get<float>();
             node.y = item["y"].get<float>();
         }
-        node.parked = item.contains("parked") && item["parked"].is_boolean() && item["parked"].get<bool>();
         description.nodes.push_back(node);
     }
 
@@ -82,6 +80,14 @@ GraphDescription loadDescription(const std::string& path) {
         if (item.contains("gain_db") && item["gain_db"].is_number()) link.gainDb = item["gain_db"].get<double>();
         description.links.push_back(link);
     }
+
+    const Json layout = root.value("layout", Json::object());
+    if (layout.is_object()) {
+        for (const auto& [id, place] : layout.items()) {
+            if (!place.is_array() || place.size() != 2 || !place[0].is_number() || !place[1].is_number()) continue;
+            description.layout.push_back({id, place[0].get<float>(), place[1].get<float>()});
+        }
+    }
     return description;
 }
 
@@ -89,7 +95,6 @@ void saveDescription(const std::string& path, const GraphDescription& descriptio
     Json root = Json::object();
     root["margin_ms"] = description.marginMs;
     root["close_to_tray"] = description.closeToTray;
-    if (!description.silentDevice.empty()) root["silent_device"] = description.silentDevice;
 
     Json nodes = Json::array();
     for (const NodeDescription& node : description.nodes) {
@@ -107,7 +112,6 @@ void saveDescription(const std::string& path, const GraphDescription& descriptio
             item["x"] = std::round(node.x);
             item["y"] = std::round(node.y);
         }
-        if (node.parked) item["parked"] = true;
         nodes.push_back(item);
     }
     root["nodes"] = nodes;
@@ -121,6 +125,13 @@ void saveDescription(const std::string& path, const GraphDescription& descriptio
         links.push_back(item);
     }
     root["links"] = links;
+    if (!description.layout.empty()) {
+        Json layout = Json::object();
+        for (const GraphDescription::Place& place : description.layout) {
+            layout[place.id] = Json::array({std::round(place.x), std::round(place.y)});
+        }
+        root["layout"] = layout;
+    }
 
     // Written next to the real file and swapped in, so that a crash in the
     // middle never leaves half a file behind.

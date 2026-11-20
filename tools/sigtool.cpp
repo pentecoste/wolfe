@@ -8,10 +8,7 @@
 //   wolfe-sigtool rec2 <inputA> <inputB> <seconds> <a.wav> <b.wav>
 //   wolfe-sigtool pace <output | in:input> <seconds>       timing of a device
 //   wolfe-sigtool sessions [seconds]                       who is playing/recording where
-//   wolfe-sigtool route <pid> <out|in> <device|default>    give a process its own device
-//   wolfe-sigtool route <pid> <out|in> show                which device it was given
-//   wolfe-sigtool listen                                   recording devices Windows plays by itself
-//   wolfe-sigtool listen <input> <output | off>            Windows' "Listen to this device", on or off
+//   wolfe-sigtool volumes                                  every device's own volume and mute
 //
 // "play follow ..." plays on the default output and moves with it when the
 // default changes, as most applications do; "play default ..." stays on the
@@ -21,11 +18,9 @@
 // "loopback:<output>" records what is being played on that output. Recordings
 // are 48 kHz stereo float. rec2 records two inputs at once and prints when
 // each one started, so that events in the two files can be compared in time.
-#include "app_devices.h"
 #include "com.h"
 #include "common.h"
 #include "devices.h"
-#include "listening.h"
 #include "stream_clock.h"
 
 #include <audiopolicy.h>
@@ -143,77 +138,6 @@ int play(const std::string& deviceSpec, double seconds, const std::string& signa
     return 0;
 }
 
-// "Listen to this device": lists the recording devices Windows is playing on
-// a playback device, or switches that on (towards `output`) or off ("off").
-int listen(const std::string& input, const std::string& output) {
-    const auto idOf = [](IMMDevice* device) {
-        LPWSTR raw = nullptr;
-        check(device->GetId(&raw), "device id");
-        const std::wstring id = raw;
-        CoTaskMemFree(raw);
-        return id;
-    };
-    if (!input.empty()) {
-        ComPtr<IMMDevice> from = findDevice(eCapture, input);
-        const bool on = output != "off";
-        std::wstring target;
-        if (on) target = idOf(findDevice(eRender, output).get());
-        if (!setListening(idOf(from.get()), on, target)) {
-            fprintf(stderr, "Windows refused\n");
-            return 1;
-        }
-    }
-    for (const Listening& listening : listListening()) {
-        std::string from = toUtf8(listening.input), to = "the default playback device";
-        try {
-            from = deviceName(findDevice(eCapture, from).get());
-            if (!listening.output.empty()) to = deviceName(findDevice(eRender, toUtf8(listening.output)).get());
-        } catch (const std::exception&) {
-        }
-        printf("%s  is played on  %s\n", from.c_str(), to.c_str());
-    }
-    return 0;
-}
-
-// Gives a process its own playback or recording device, or shows the one it has.
-int route(DWORD pid, const std::string& direction, const std::string& deviceSpec) {
-    const EDataFlow flow = direction == "in" ? eCapture : eRender;
-    AppDevices devices;
-    if (!devices.available()) {
-        fprintf(stderr, "this version of Windows has no per-application devices\n");
-        return 1;
-    }
-    if (deviceSpec != "show") {
-        std::wstring id;
-        if (deviceSpec != "default") {
-            ComPtr<IMMDevice> device = findDevice(flow, deviceSpec);
-            LPWSTR raw = nullptr;
-            check(device->GetId(&raw), "device id");
-            id = raw;
-            CoTaskMemFree(raw);
-            printf("giving pid %lu the device %s\n", pid, deviceName(device.get()).c_str());
-        } else {
-            printf("giving pid %lu back to the default device\n", pid);
-        }
-        if (!devices.set(pid, flow, id)) {
-            fprintf(stderr, "Windows refused\n");
-            return 1;
-        }
-    }
-    const std::wstring now = devices.get(pid, flow);
-    if (now.empty()) {
-        printf("pid %lu follows the default device\n", pid);
-    } else {
-        std::string name = toUtf8(now);
-        try {
-            name = deviceName(findDevice(flow, toUtf8(now)).get());
-        } catch (const std::exception&) {
-        }
-        printf("pid %lu has its own device: %s\n", pid, name.c_str());
-    }
-    return 0;
-}
-
 // Opens a device the way the engine does (event driven, 48 kHz float) and
 // reports how regularly it asks for or delivers audio, and how far its clock
 // is from the computer's. Plays silence / discards what it records.
@@ -324,6 +248,28 @@ int pace(std::string spec, double seconds) {
 
 // Lists which applications have audio streams open on which device, with the
 // loudest level each one reached during `seconds`.
+// The volume Windows applies to each device as a whole (the slider in its
+// properties), playback and recording.
+int volumes() {
+    for (EDataFlow flow : {eRender, eCapture}) {
+        for (const DeviceInfo& info : listDevices(flow)) {
+            ComPtr<IMMDevice> device = findDevice(flow, toUtf8(info.id));
+            ComPtr<IAudioEndpointVolume> volume;
+            if (FAILED(device->Activate(__uuidof(IAudioEndpointVolume), CLSCTX_ALL, nullptr, volume.putVoid()))) continue;
+            float scalar = 0, db = 0;
+            BOOL muted = FALSE;
+            volume->GetMasterVolumeLevelScalar(&scalar);
+            volume->GetMasterVolumeLevel(&db);
+            volume->GetMute(&muted);
+            DWORD hardware = 0;
+            volume->QueryHardwareSupport(&hardware);
+            printf("%-4s %-52s %3.0f%%  %+6.1f dB%s%s\n", flow == eRender ? "out" : "in", info.name.c_str(), scalar * 100.0f,
+                   db, muted ? "  MUTED" : "", (hardware & ENDPOINT_HARDWARE_SUPPORT_VOLUME) ? "  (hardware)" : "");
+        }
+    }
+    return 0;
+}
+
 int sessions(double seconds) {
     struct Row {
         std::string device, process;
@@ -518,8 +464,7 @@ int main(int argc, char** argv) {
         }
         if (command == "pace" && argc >= 4) return pace(argv[2], atof(argv[3]));
         if (command == "sessions") return sessions(argc >= 3 ? atof(argv[2]) : 0.0);
-        if (command == "route" && argc >= 5) return route((DWORD)atoi(argv[2]), argv[3], argv[4]);
-        if (command == "listen") return listen(argc >= 3 ? argv[2] : "", argc >= 4 ? argv[3] : "");
+        if (command == "volumes") return volumes();
         if (command == "rec" && argc >= 5) {
             std::vector<Recorder> recorders(1);
             recorders[0].open(argv[2]);

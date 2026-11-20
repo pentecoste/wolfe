@@ -33,6 +33,9 @@ private:
     void drawStatusLine();
     void addEffectAt(const std::string& type, ImVec2 screenPosition);
     void addItems(ImVec2 screenPosition);
+    void askToRemove(int nodeUid);
+    void placeNew(int uid, ImVec2 screenPosition);
+    void drawDialogs();
 
     Controller& controller_;
     float scale_;
@@ -52,6 +55,15 @@ private:
     bool overPin_ = false;    // the mouse was over a pin at the end of the last frame
     int menuNode_ = 0, menuLink_ = 0;
     ImVec2 menuPosition_;
+
+    // A new device of Wolfe's being named: 1 a speaker, 2 a microphone (0: none).
+    int naming_ = 0;
+    bool namingOpened_ = false;
+    char name_[64] = "";
+    std::string nameProblem_;
+    ImVec2 namingAt_;
+    int removing_ = 0;  // a device of Wolfe's the user asked to remove, to be confirmed
+    bool removingOpened_ = false;
 
     std::string notice_;
     double noticeUntil_ = 0;

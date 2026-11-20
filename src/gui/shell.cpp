@@ -3,6 +3,7 @@
 #include "common.h"
 
 #include <commdlg.h>
+#include <shellapi.h>
 
 #include <algorithm>
 #include <cmath>
@@ -59,6 +60,8 @@ void setStartsWithWindows(bool enabled) {
     }
     RegCloseKey(key);
 }
+
+void openVolumeMixer() { ShellExecuteW(nullptr, L"open", L"ms-settings:apps-volume", nullptr, nullptr, SW_SHOWNORMAL); }
 
 std::string askForGraphFile(HWND owner) {
     wchar_t path[MAX_PATH] = L"";

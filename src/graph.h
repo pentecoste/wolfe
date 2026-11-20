@@ -88,6 +88,9 @@ public:
     // Extra age given to the audio on top of the minimum, to absorb timing
     // irregularities. More is safer, less is faster. Applies to nodes added later.
     void setMarginMs(double milliseconds) { marginSeconds_ = milliseconds / 1000.0; }
+    // False: Wolfe's own devices are never given to Windows (for tests).
+    // Call before adding the first one.
+    void setOfferVirtualDevices(bool offer) { offerVirtual_ = offer; }
 
     void start();
     void stop();
@@ -150,6 +153,7 @@ private:
     std::vector<std::shared_ptr<Link>> links_;
 
     double marginSeconds_ = 0.004;
+    bool offerVirtual_ = true;
     bool running_ = false;
 
     mutable std::mutex planMutex_;  // held by the cycle while it runs; also guards what follows

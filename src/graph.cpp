@@ -103,7 +103,7 @@ void Graph::addOutput(const std::string& id, const std::string& device) {
 void Graph::addVirtualDevice(const std::string& id, const VirtualDeviceSpec& spec) {
     requireNewId(id);
     if (spec.name.empty() || spec.serial.empty()) throw std::runtime_error("\"" + id + "\" needs a name and a serial");
-    if (!virtualDevices_) virtualDevices_ = std::make_unique<VirtualDevices>(clock_);
+    if (!virtualDevices_) virtualDevices_ = std::make_unique<VirtualDevices>(clock_, 3241, offerVirtual_);
     if (!spec.recording) {
         InputSpec tap;
         tap.kind = InputKind::Loopback;

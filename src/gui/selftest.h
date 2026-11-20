@@ -14,14 +14,6 @@ namespace wolfe {
 // input is fed to the user interface frame by frame, and after each gesture
 // the graph is looked at. Started with "wolfe.exe --selftest <report file>",
 // on a graph file made for the purpose.
-//
-// The links that Windows makes are only tried when the environment names a
-// running application to try them on, WOLFE_SELFTEST_APP, and a playback
-// device to move it to, WOLFE_SELFTEST_DEVICE (parts of their names): that
-// application really is moved, taken off its device and put back. Likewise
-// "Listen to this device": with WOLFE_SELFTEST_LISTEN naming a recording
-// device that Windows is playing somewhere and WOLFE_SELFTEST_LISTEN_TO a
-// playback device, that link is moved there and then removed.
 class SelfTest {
 public:
     SelfTest(Controller& controller, std::string reportPath);
@@ -54,8 +46,6 @@ private:
     std::vector<std::function<bool()>> steps_;
     size_t current_ = 0;
     int first_ = 0, second_ = 0, third_ = 0;  // the effect nodes the gestures are tried on
-    int app_ = 0, from_ = 0, to_ = 0;  // an application, the device it plays on, the one to move it to
-    int heard_ = 0, heardOn_ = 0, heardThen_ = 0;  // a recording device, where Windows plays it, where to move that
 };
 
 }  // namespace wolfe

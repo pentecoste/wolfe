@@ -5,6 +5,7 @@
 #include "imnodes.h"
 
 #include <cmath>
+#include <cstdio>
 #include <vector>
 
 namespace wolfe {
@@ -23,10 +24,13 @@ const float kNodeWidth = 190.0f;
 ImU32 titleColour(const Node& node, float brighten) {
     float r, g, b;
     switch (node.kind) {
-        case NodeKind::Input: r = 0.20f, g = 0.42f, b = 0.72f; break;     // blue
-        case NodeKind::App: r = 0.45f, g = 0.33f, b = 0.70f; break;       // violet
-        case NodeKind::Loopback: r = 0.16f, g = 0.50f, b = 0.52f; break;  // teal
-        case NodeKind::Effect: r = 0.72f, g = 0.45f, b = 0.16f; break;    // amber
+        case NodeKind::Input: r = 0.20f, g = 0.42f, b = 0.72f; break;  // blue
+        case NodeKind::PlayingApp:
+        case NodeKind::RecordingApp: r = 0.45f, g = 0.33f, b = 0.70f; break;  // violet
+        case NodeKind::Loopback: r = 0.16f, g = 0.50f, b = 0.52f; break;      // teal
+        case NodeKind::Effect: r = 0.72f, g = 0.45f, b = 0.16f; break;        // amber
+        case NodeKind::WolfeSpeaker:
+        case NodeKind::WolfeMic: r = 0.66f, g = 0.27f, b = 0.40f; break;  // wine
         default: r = 0.22f, g = 0.56f, b = 0.32f; break;                  // green
     }
     if (!node.present) r = g = b = 0.30f;
@@ -129,8 +133,8 @@ void Editor::draw(double now) {
     // While Wolfe carries no audio at all, say so and say what to do.
     if (controller_.links().empty()) {
         const char* text = !anythingShown_ ? "Looking for audio devices..."
-                                            : "Wolfe is not routing anything yet. Drag from a pin on the right of a box to a "
-                                              "pin on the left of another, or use Wolfe > Import a graph file.";
+                                            : "Wolfe is not routing anything yet. Add a Wolfe speaker, have applications play "
+                                              "on it in Windows' settings, and drag from its pin to your headphones.";
         ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.16f, 0.21f, 0.30f, 1.0f));
         ImGui::BeginChild("banner", ImVec2(0, ImGui::GetFrameHeight() + 4.0f * scale_));
         ImGui::SetCursorPos(ImVec2(12.0f * scale_, 2.0f * scale_));
@@ -146,6 +150,7 @@ void Editor::draw(double now) {
                            ImGui::GetWindowPos().y + ImGui::GetWindowSize().y * 0.4f);
     drawCanvas();
     drawMenus();
+    drawDialogs();
     ImGui::EndChild();
 
     drawStatusLine();
@@ -163,19 +168,7 @@ void Editor::drawMenuBar() {
                 notify(problems.empty() ? "Imported." : problems);
             }
         }
-        // Where an application goes when it is taken off every playback device.
-        if (ImGui::BeginMenu("Silent device")) {
-            const int silent = controller_.silentDevice();
-            int chosen = -1;
-            for (const Node& node : controller_.nodes()) {
-                if (node.kind != NodeKind::Output || !node.present) continue;
-                if (ImGui::MenuItem(node.label.c_str(), nullptr, node.uid == silent)) chosen = node.uid;
-            }
-            ImGui::Separator();
-            if (ImGui::MenuItem("None", nullptr, silent == 0)) chosen = 0;
-            if (chosen >= 0) controller_.setSilentDevice(chosen);
-            ImGui::EndMenu();
-        }
+        if (ImGui::MenuItem("Choose applications' devices in Windows...")) openVolumeMixer();
         ImGui::Separator();
         const bool autostart = startsWithWindows();
         if (ImGui::MenuItem("Start with Windows", nullptr, autostart)) setStartsWithWindows(!autostart);
@@ -194,22 +187,137 @@ void Editor::drawMenuBar() {
 
 // The things a user can put on the canvas; devices and applications appear by themselves.
 void Editor::addItems(ImVec2 screenPosition) {
+    const auto startNaming = [&](int what) {
+        naming_ = what;
+        namingOpened_ = false;
+        namingAt_ = screenPosition;
+        nameProblem_.clear();
+        const std::string name = controller_.freeWolfeName(what == 2);
+        snprintf(name_, sizeof(name_), "%s", name.c_str());
+    };
+    if (ImGui::MenuItem("Wolfe speaker...")) startNaming(1);
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("A playback device of Wolfe's own: what applications play on it comes into Wolfe.");
+    }
+    if (ImGui::MenuItem("Wolfe microphone...")) startNaming(2);
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("A recording device of Wolfe's own: applications that record from it hear what Wolfe sends it.");
+    }
+    if (ImGui::BeginMenu("What is played on")) {
+        bool any = false;
+        for (const Node& node : controller_.nodes()) {
+            if (node.kind != NodeKind::Output || !node.present) continue;
+            any = true;
+            if (ImGui::MenuItem(node.label.c_str())) placeNew(controller_.addLoopback(node.uid, 0, 0), screenPosition);
+        }
+        if (!any) ImGui::TextDisabled("no playback devices");
+        ImGui::EndMenu();
+    }
+    ImGui::Separator();
     if (ImGui::MenuItem("Noise suppression")) addEffectAt("rnnoise", screenPosition);
     if (ImGui::MenuItem("Mix")) addEffectAt("mix", screenPosition);
 }
 
 void Editor::addEffectAt(const std::string& type, ImVec2 screenPosition) {
-    const int uid = controller_.addEffect(type, 0, 0);
-    if (!uid) return;
+    placeNew(controller_.addEffect(type, 0, 0), screenPosition);
+}
+
+void Editor::placeNew(int uid, ImVec2 screenPosition) {
+    if (!uid || placed_.count(uid)) return;
     // The canvas converts the screen position; the controller learns it when
     // positions are read back at the end of the frame.
     ImNodes::SetNodeScreenSpacePos(uid, screenPosition);
     placed_.insert(uid);
 }
 
+// Removing one of Wolfe's devices takes it away from Windows, and with it the
+// applications' choice of it: that is asked first.
+void Editor::askToRemove(int nodeUid) {
+    const Node* node = controller_.node(nodeUid);
+    if (!node || !controller_.removable(*node)) return;
+    if (node->isWolfeDevice()) {
+        removing_ = nodeUid;
+        removingOpened_ = false;
+    } else {
+        controller_.removeNode(nodeUid);
+    }
+}
+
+// The windows that ask something before going on.
+void Editor::drawDialogs() {
+    const ImGuiWindowFlags flags = ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings;
+    if (naming_ && !namingOpened_) {
+        ImGui::OpenPopup("Name the new device");
+        namingOpened_ = true;
+    }
+    if (ImGui::BeginPopupModal("Name the new device", nullptr, flags)) {
+        const bool recording = naming_ == 2;
+        ImGui::TextUnformatted(recording ? "A recording device of Wolfe's own. Applications that record from it hear\n"
+                                           "whatever you link into it here."
+                                         : "A playback device of Wolfe's own. What applications play on it comes into\n"
+                                           "Wolfe, and goes wherever you link it here.");
+        ImGui::Spacing();
+        if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
+        ImGui::SetNextItemWidth(320.0f * scale_);
+        const bool entered = ImGui::InputText("Name", name_, sizeof(name_), ImGuiInputTextFlags_EnterReturnsTrue);
+        ImGui::TextDisabled("Windows shows it with this name. Applications are given it in Windows'\n"
+                            "settings, and keep it as long as the device is not removed here.");
+        if (!nameProblem_.empty()) ImGui::TextColored(ImVec4(0.95f, 0.65f, 0.30f, 1.0f), "%s", nameProblem_.c_str());
+        ImGui::Spacing();
+        if (ImGui::Button("Create") || entered) {
+            const int uid = controller_.addWolfeDevice(recording, name_, 0, 0, &nameProblem_);
+            if (uid) {
+                placeNew(uid, namingAt_);
+                naming_ = 0;
+                ImGui::CloseCurrentPopup();
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+            naming_ = 0;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    } else if (namingOpened_) {
+        naming_ = 0;
+        namingOpened_ = false;
+    }
+
+    if (removing_ && !removingOpened_) {
+        ImGui::OpenPopup("Remove the device");
+        removingOpened_ = true;
+    }
+    if (ImGui::BeginPopupModal("Remove the device", nullptr, flags)) {
+        const Node* node = controller_.node(removing_);
+        if (!node) {
+            removing_ = 0;
+            ImGui::CloseCurrentPopup();
+        } else {
+            ImGui::Text("Remove \"%s\"?", node->label.c_str());
+            ImGui::TextUnformatted("Windows will no longer have it. Applications that were given it go back to the\n"
+                                   "default device, and a new device with the same name would be new to Windows.");
+            ImGui::Spacing();
+            if (ImGui::Button("Remove")) {
+                controller_.removeNode(removing_);
+                removing_ = 0;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Keep it") || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+                removing_ = 0;
+                ImGui::CloseCurrentPopup();
+            }
+        }
+        ImGui::EndPopup();
+    } else if (removingOpened_) {
+        removing_ = 0;
+        removingOpened_ = false;
+    }
+}
+
 void Editor::drawNode(const Node& node) {
     const float width = kNodeWidth * scale_;
-    const bool trouble = node.used() && !node.healthy;
+    const bool trouble = node.active && !node.healthy;
 
     ImNodes::PushColorStyle(ImNodesCol_TitleBar, titleColour(node, 0.0f));
     ImNodes::PushColorStyle(ImNodesCol_TitleBarHovered, titleColour(node, 0.08f));
@@ -219,6 +327,10 @@ void Editor::drawNode(const Node& node) {
 
     std::string title = node.label, second = node.detail;
     if (node.kind == NodeKind::Input || node.kind == NodeKind::Output) splitDeviceName(node.label, title, second);
+    if (node.kind == NodeKind::Loopback) {
+        std::string adapter;
+        splitDeviceName(node.label, title, adapter);
+    }
 
     ImNodes::BeginNodeTitleBar();
     ImGui::TextUnformatted(fit(title, width).c_str());
@@ -228,28 +340,36 @@ void Editor::drawNode(const Node& node) {
     // A few words saying what it is doing.
     std::string state;
     ImVec4 colour(0.55f, 0.57f, 0.62f, 1.0f);
-    if (!node.present) {
-        state = node.kind == NodeKind::App ? "not running" : "not plugged in";
-    } else if (!node.used()) {
-        // Not part of anything made in Wolfe; Windows may still be using it.
-        // (Being one end of a cable does not by itself mean that anything passes through.)
-        bool flowing = false, connected = false;
-        for (const SystemLink& link : controller_.systemLinks()) {
-            if (link.kind == SystemLink::Cable || (link.from != node.uid && link.to != node.uid)) continue;
-            connected = true;
-            flowing |= link.active;
+    // Whether Windows has an application playing or recording here right now.
+    bool flowing = false;
+    for (const SystemLink& link : controller_.systemLinks()) {
+        if (link.from == node.uid || link.to == node.uid) flowing |= link.active;
+    }
+    const ImVec4 inUse(0.55f, 0.70f, 0.88f, 1.0f), live(0.45f, 0.85f, 0.55f, 1.0f), problem(0.95f, 0.65f, 0.30f, 1.0f);
+    if (node.isApp()) {
+        state = !flowing ? "idle" : node.kind == NodeKind::PlayingApp ? "playing" : "recording";
+        if (flowing) colour = inUse;
+    } else if (node.isWolfeDevice()) {
+        if (node.active && !node.healthy) {
+            state = node.status;
+            colour = problem;
+        } else if (!node.present) {
+            state = "being added to Windows";
+        } else {
+            state = flowing ? "in use" : "ready";
+            if (flowing) colour = live;
         }
+    } else if (!node.present) {
+        state = "not plugged in";
+    } else if (!node.active) {
+        // Not part of anything made in Wolfe; Windows may still be using it.
         state = flowing ? "in use" : "idle";
-        if (flowing) colour = ImVec4(0.55f, 0.70f, 0.88f, 1.0f);
-        if (node.kind == NodeKind::App && (node.parked || node.silenced) && !connected) state = "heard nowhere";
-        if (node.kind == NodeKind::Output && node.uid == controller_.silentDevice() && !flowing) state = "silent device";
+        if (flowing) colour = inUse;
     } else if (node.healthy) {
-        colour = ImVec4(0.45f, 0.85f, 0.55f, 1.0f);
-        // "capturing java.exe (pid 9312)" -> which process was picked.
-        state = node.kind == NodeKind::App ? node.status.substr(std::min(node.status.size(), (size_t)10)) : "live";
-        if (node.kind == NodeKind::Effect) state = "on";
+        colour = live;
+        state = node.kind == NodeKind::Effect ? "on" : "live";
     } else {
-        colour = ImVec4(0.95f, 0.65f, 0.30f, 1.0f);
+        colour = problem;
         state = node.status;
     }
 
@@ -325,12 +445,9 @@ void Editor::drawCanvas() {
     // (A link that was pulled off its pin is in the user's hand, not here.)
     for (const Connection& link : controller_.links()) {
         if (link.uid == heldLink_) continue;
-        // One that is paused (Windows already plays the same thing there) is drawn washed out.
-        if (link.suspended) ImNodes::PushColorStyle(ImNodesCol_Link, IM_COL32(120, 200, 255, 80));
         ImNodes::Link(link.uid, outputPin(link.from), inputPin(link.to));
-        if (link.suspended) ImNodes::PopColorStyle();
     }
-    // The ones Windows makes, pale: paler still when nothing is flowing.
+    // Where Windows has applications play and record, pale: paler still when nothing is flowing.
     for (const SystemLink& link : controller_.systemLinks()) {
         const Node* from = controller_.node(link.from);
         const Node* to = controller_.node(link.to);
@@ -415,10 +532,7 @@ void Editor::drawCanvas() {
         if (!ids.empty()) {
             ImNodes::GetSelectedNodes(ids.data());
             ImNodes::ClearNodeSelection();
-            for (int id : ids) {
-                const Node* node = controller_.node(id);
-                if (node && controller_.removable(*node)) controller_.removeNode(id);
-            }
+            for (int id : ids) askToRemove(id);
         }
     }
 
@@ -469,28 +583,22 @@ void Editor::drawMenus() {
             ImGui::CloseCurrentPopup();
         } else {
             const int uid = node->uid;
-            const bool isApp = node->kind == NodeKind::App;
+            const bool isApp = node->isApp();
             const bool isOutput = node->kind == NodeKind::Output && node->present;
-            const bool isSilent = uid == controller_.silentDevice();
             const bool canRemove = controller_.removable(*node);
-            const bool canGiveBack = controller_.managed(*node);
-            // An application is also connected to the device Windows plays it on.
-            bool connected = controller_.linked(uid);
-            for (const SystemLink& link : controller_.systemLinks()) {
-                connected |= isApp && link.kind == SystemLink::Plays && link.from == uid;
-            }
+            const bool connected = controller_.linked(uid);
             ImGui::TextDisabled("%s", node->label.c_str());
             ImGui::Separator();
             // Each of these may change the list of nodes: `node` is not used after them.
-            if (ImGui::MenuItem("Disconnect everything", nullptr, false, connected)) {
-                const std::string problem = controller_.disconnectAll(uid);
-                if (!problem.empty()) notify(problem);
-            } else if (isApp && ImGui::MenuItem("Let Windows choose its devices again", nullptr, false, canGiveBack)) {
-                controller_.giveBack(uid);
-            } else if (isOutput && ImGui::MenuItem("Use as the silent device", nullptr, isSilent)) {
-                controller_.setSilentDevice(isSilent ? 0 : uid);
-            } else if (ImGui::MenuItem("Remove", "Del", false, canRemove)) {
-                controller_.removeNode(uid);
+            if (isApp) {
+                if (ImGui::MenuItem("Choose its devices in Windows...")) openVolumeMixer();
+            } else if (isOutput && ImGui::MenuItem("Add what is played on it")) {
+                const ImVec2 corner = ImNodes::GetNodeScreenSpacePos(uid);
+                placeNew(controller_.addLoopback(uid, 0, 0), ImVec2(corner.x - 300.0f * scale_, corner.y));
+            } else if (!isApp && ImGui::MenuItem("Disconnect everything", nullptr, false, connected)) {
+                controller_.disconnectAll(uid);
+            } else if (!isApp && ImGui::MenuItem("Remove", "Del", false, canRemove)) {
+                askToRemove(uid);
             }
         }
         ImGui::EndPopup();
@@ -502,19 +610,10 @@ void Editor::drawMenus() {
             if (candidate.uid == menuLink_) link = &candidate;
         }
         if (const SystemLink* theirs = link ? nullptr : controller_.systemLink(menuLink_)) {
-            // One that Windows makes: what it is, and the one thing a menu can do to it.
-            const int uid = theirs->uid;
-            const bool removable = theirs->kind == SystemLink::Plays || theirs->kind == SystemLink::Listens;
-            const bool canHandOver = controller_.canHandOver(uid);
-            ImGui::TextUnformatted(controller_.describeLink(uid).c_str());
-            if (removable) ImGui::Separator();
-            std::string problem;
-            if (canHandOver && ImGui::MenuItem("Let Wolfe carry it instead (gain, less delay)")) {
-                problem = controller_.handOver(uid);
-            } else if (removable && ImGui::MenuItem("Remove this link", "Ctrl+click")) {
-                problem = controller_.disconnect(uid);
-            }
-            if (!problem.empty()) notify(problem);
+            // One that Windows makes: what it is, and where to change it.
+            ImGui::TextUnformatted(controller_.describeLink(theirs->uid).c_str());
+            ImGui::Separator();
+            if (ImGui::MenuItem("Choose applications' devices in Windows...")) openVolumeMixer();
         } else if (!link) {
             ImGui::CloseCurrentPopup();
         } else {
@@ -522,15 +621,10 @@ void Editor::drawMenus() {
             const int uid = link->uid;
             float gain = link->gainDb;
             ImGui::Text("%s  ->  %s", controller_.node(link->from)->label.c_str(), controller_.node(link->to)->label.c_str());
-            if (link->suspended) ImGui::TextDisabled("Paused: Windows already plays this there.");
             ImGui::SetNextItemWidth(260.0f * scale_);
             if (ImGui::SliderFloat("##gain", &gain, -40.0f, 12.0f, "%+.1f dB")) controller_.setGainDb(uid, gain);
-            const bool canHandOver = controller_.canHandOver(uid);
             if (ImGui::MenuItem("Back to 0 dB", nullptr, false, gain != 0.0f)) {
                 controller_.setGainDb(uid, 0.0f);
-            } else if (canHandOver && ImGui::MenuItem("Let Windows carry it instead (also without Wolfe)")) {
-                const std::string problem = controller_.handOver(uid);
-                if (!problem.empty()) notify(problem);
             } else if (ImGui::MenuItem("Remove this link", "Ctrl+click")) {
                 controller_.disconnect(uid);
             }
@@ -552,7 +646,8 @@ void Editor::drawStatusLine() {
         ImGui::TextColored(ImVec4(0.95f, 0.65f, 0.30f, 1.0f), "%s", oneLine.c_str());
     } else {
         ImGui::TextDisabled("Drag from a pin to connect, as many times as you like.  Drag a link to move the end you took; "
-                            "pull it away, or Ctrl+click, to remove it.  Bright links are carried by Wolfe, pale ones by Windows.");
+                            "pull it away, or Ctrl+click, to remove it.  Bright links are carried by Wolfe; pale ones show "
+                            "where Windows has applications play and record.");
     }
 }
 

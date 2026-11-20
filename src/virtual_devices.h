@@ -10,9 +10,10 @@
 namespace wolfe {
 
 // How Wolfe's devices identify themselves over USB. Windows names a device's
-// endpoints after vendor id, product id, release and serial number, and gives
-// them new ids (losing which applications were assigned to them) if any of
-// these change: they must stay as they are once people use them.
+// endpoints after vendor id, product id, release and serial number, and the
+// kind of terminal each one is (see usbip_server.cpp), and gives them new ids
+// (losing which applications were assigned to them) if any of these change:
+// they must stay as they are once people use them.
 //
 // 1209 is pid.codes, the vendor id shared by open source hardware; 0003 and
 // 0004 are placeholders until Wolfe has product ids of its own there.
@@ -52,7 +53,9 @@ public:
 // fast as the graph consumes, a microphone delivers as fast as it produces.
 class VirtualDevices {
 public:
-    explicit VirtualDevices(std::shared_ptr<const GraphClock> clock, int port = 3241);
+    // With `offer` false the devices exist for the graph but Windows is never
+    // given them (for tests).
+    explicit VirtualDevices(std::shared_ptr<const GraphClock> clock, int port = 3241, bool offer = true);
     ~VirtualDevices();
 
     std::shared_ptr<VirtualDevice> add(const VirtualDeviceSpec& spec);
