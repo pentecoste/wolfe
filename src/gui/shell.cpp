@@ -2,7 +2,6 @@
 
 #include "common.h"
 
-#include <commdlg.h>
 #include <shellapi.h>
 
 #include <algorithm>
@@ -59,21 +58,6 @@ void setStartsWithWindows(bool enabled) {
         RegDeleteValueW(key, kRunValue);
     }
     RegCloseKey(key);
-}
-
-void openVolumeMixer() { ShellExecuteW(nullptr, L"open", L"ms-settings:apps-volume", nullptr, nullptr, SW_SHOWNORMAL); }
-
-std::string askForGraphFile(HWND owner) {
-    wchar_t path[MAX_PATH] = L"";
-    OPENFILENAMEW dialog = {};
-    dialog.lStructSize = sizeof(dialog);
-    dialog.hwndOwner = owner;
-    dialog.lpstrFilter = L"Wolfe graph (*.json)\0*.json\0All files\0*.*\0";
-    dialog.lpstrFile = path;
-    dialog.nMaxFile = MAX_PATH;
-    dialog.lpstrTitle = L"Import a graph";
-    dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
-    return GetOpenFileNameW(&dialog) ? toUtf8(path) : std::string();
 }
 
 // A dark rounded square with a zigzag of connected dots: a "W" made of a patch.

@@ -65,6 +65,9 @@ GraphDescription loadDescription(const std::string& path) {
             node.serial = optionalString(item, "serial");
         }
         node.label = optionalString(item, "label");
+        if (node.type == "gain" && item.contains("gain_db") && item["gain_db"].is_number()) {
+            node.gainDb = item["gain_db"].get<double>();
+        }
         if (item.contains("x") && item.contains("y") && item["x"].is_number() && item["y"].is_number()) {
             node.hasPosition = true;
             node.x = item["x"].get<float>();
@@ -81,13 +84,6 @@ GraphDescription loadDescription(const std::string& path) {
         description.links.push_back(link);
     }
 
-    const Json layout = root.value("layout", Json::object());
-    if (layout.is_object()) {
-        for (const auto& [id, place] : layout.items()) {
-            if (!place.is_array() || place.size() != 2 || !place[0].is_number() || !place[1].is_number()) continue;
-            description.layout.push_back({id, place[0].get<float>(), place[1].get<float>()});
-        }
-    }
     return description;
 }
 
@@ -107,6 +103,7 @@ void saveDescription(const std::string& path, const GraphDescription& descriptio
             item["name"] = node.target;
             if (!node.serial.empty()) item["serial"] = node.serial;
         }
+        if (node.type == "gain") item["gain_db"] = std::round(node.gainDb * 10.0) / 10.0;
         if (!node.label.empty()) item["label"] = node.label;
         if (node.hasPosition) {
             item["x"] = std::round(node.x);
@@ -125,13 +122,6 @@ void saveDescription(const std::string& path, const GraphDescription& descriptio
         links.push_back(item);
     }
     root["links"] = links;
-    if (!description.layout.empty()) {
-        Json layout = Json::object();
-        for (const GraphDescription::Place& place : description.layout) {
-            layout[place.id] = Json::array({std::round(place.x), std::round(place.y)});
-        }
-        root["layout"] = layout;
-    }
 
     // Written next to the real file and swapped in, so that a crash in the
     // middle never leaves half a file behind.
@@ -161,6 +151,7 @@ void addNode(const NodeDescription& node, Graph& graph) {
         graph.addVirtualDevice(node.id, spec);
     } else {
         graph.addEffect(node.id, node.type);
+        if (node.type == "gain") graph.setEffectGain(node.id, (float)std::pow(10.0, node.gainDb / 20.0));
     }
 }
 

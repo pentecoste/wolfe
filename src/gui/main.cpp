@@ -3,7 +3,6 @@
 //
 //   wolfe.exe                 open the window
 //   wolfe.exe --tray          start hidden in the notification area
-//   wolfe.exe --import <path> replace the graph with the one in this file
 //   wolfe.exe --file <path>   keep the graph in this file instead of the usual one
 //   wolfe.exe --selftest <report>   try the editor's gestures by itself (see selftest.h)
 #include "app/controller.h"
@@ -184,7 +183,7 @@ std::vector<std::string> commandLine() {
 int WINAPI WinMain(HINSTANCE instance, HINSTANCE, LPSTR, int) {
     bool startHidden = false;
     std::string document = defaultDocumentPath();
-    std::string importPath, selfTestReport;
+    std::string selfTestReport;
     const std::vector<std::string> arguments = commandLine();
     for (size_t i = 0; i < arguments.size(); i++) {
         const std::string& argument = arguments[i];
@@ -193,14 +192,8 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE, LPSTR, int) {
             startHidden = true;
         } else if (argument == "--file" && hasValue) {
             document = arguments[++i];
-        } else if (argument == "--import" && hasValue) {
-            importPath = arguments[++i];
         } else if (argument == "--selftest" && hasValue) {
             selfTestReport = arguments[++i];
-        } else if (argument.size() > 5 && toLower(argument.substr(argument.size() - 5)) == ".json") {
-            // A graph file given just like that, or the way the console
-            // program takes it ("run file.json"), is one to import.
-            importPath = argument;
         }
     }
     g_selfTesting = !selfTestReport.empty();
@@ -234,7 +227,7 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE, LPSTR, int) {
     windowClass.lpszClassName = kWindowClass;
     RegisterClassExW(&windowClass);
 
-    // Wide enough for the five columns boxes are first laid out in, if the screen allows.
+    // Roomy, if the screen allows.
     RECT workArea = {0, 0, 1280, 800};
     SystemParametersInfoW(SPI_GETWORKAREA, 0, &workArea, 0);
     const int width = std::min((int)(1480 * scale), (int)((workArea.right - workArea.left) * 0.92));
@@ -280,10 +273,8 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE, LPSTR, int) {
         Controller controller(document);
         g_controller = &controller;
         Editor editor(controller, scale);
-        editor.window = window;
-        std::string problems = controller.load();
-        if (!importPath.empty()) problems = controller.importFrom(importPath);
-        if (!problems.empty()) editor.notify(problems);
+        const std::string problems = controller.load();
+        if (!problems.empty()) logLine("in %s:\n%s", document.c_str(), problems.c_str());
 
         std::unique_ptr<SelfTest> selfTest;
         if (g_selfTesting) {

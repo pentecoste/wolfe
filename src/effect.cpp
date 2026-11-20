@@ -2,6 +2,8 @@
 
 #include "rnnoise.h"
 
+#include <atomic>
+
 namespace wolfe {
 
 namespace {
@@ -9,6 +11,32 @@ namespace {
 class MixEffect : public Effect {
 public:
     void process(float*) override {}
+};
+
+// A change of gain is spread over one cycle, so that it does not click.
+class GainEffect : public Effect {
+public:
+    void process(float* stereo) override {
+        const float target = target_.load(std::memory_order_relaxed);
+        if (target == current_) {
+            if (target != 1.0f) {
+                for (int i = 0; i < kQuantum * 2; i++) stereo[i] *= target;
+            }
+            return;
+        }
+        const float step = (target - current_) / kQuantum;
+        for (int i = 0; i < kQuantum; i++) {
+            const float gain = current_ + step * (i + 1);
+            stereo[i * 2] *= gain;
+            stereo[i * 2 + 1] *= gain;
+        }
+        current_ = target;
+    }
+    void setGain(float gain) override { target_.store(gain, std::memory_order_relaxed); }
+
+private:
+    std::atomic<float> target_{1.0f};
+    float current_ = 1.0f;  // used by the audio thread only
 };
 
 class RnnoiseEffect : public Effect {
@@ -32,6 +60,7 @@ private:
 }  // namespace
 
 std::shared_ptr<Effect> createEffect(const std::string& type) {
+    if (type == "gain") return std::make_shared<GainEffect>();
     if (type == "mix") return std::make_shared<MixEffect>();
     if (type == "rnnoise") return std::make_shared<RnnoiseEffect>();
     return nullptr;

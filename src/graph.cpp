@@ -81,8 +81,9 @@ void Graph::addInput(const std::string& id, InputSpec spec) {
 
 void Graph::addEffect(const std::string& id, const std::string& type) {
     requireNewId(id);
-    if (!createEffect(type)) throw std::runtime_error("unknown effect type \"" + type + "\"");
-    effects_[id] = type;
+    std::shared_ptr<Effect> effect = createEffect(type);
+    if (!effect) throw std::runtime_error("unknown effect type \"" + type + "\"");
+    effects_[id] = std::move(effect);
 }
 
 void Graph::addOutput(const std::string& id, const std::string& device) {
@@ -239,6 +240,10 @@ void Graph::setLinkGain(const std::string& from, const std::string& to, float ga
     if (auto link = findLink(from, to)) link->gain = gain;
 }
 
+void Graph::setEffectGain(const std::string& id, float gain) {
+    if (auto found = effects_.find(id); found != effects_.end()) found->second->setGain(gain);
+}
+
 // Collects everything that can reach an output and orders it so that each
 // node comes after the nodes feeding it. Readers, effects and gains of the
 // previous plan are carried over, so that changing one link does not disturb
@@ -288,7 +293,7 @@ std::shared_ptr<Plan> Graph::buildPlan(const Plan* previous) const {
                                                  : std::make_shared<SourceReader>(tap->second->buffer(), marginSeconds_);
             }
         } else {
-            step.effect = old && old->effect ? old->effect : createEffect(effects_.at(id));
+            step.effect = effects_.at(id);
             for (const auto& link : links_) {
                 if (link->to != id) continue;
                 const int from = visit(link->from);

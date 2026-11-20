@@ -57,17 +57,17 @@ SelfTest::SelfTest(Controller& controller, std::string reportPath)
 
     wait(20);  // let the window settle and the first look at the system arrive
     run([this] {
-        // Work in a far corner of the canvas, clear of whatever devices and
-        // applications this computer has put on it.
+        // Work in a far corner of the canvas, clear of whatever the graph
+        // file already has on it.
         const float corner = 5000.0f;
         ImNodes::EditorContextResetPanning(ImVec2(-corner, -corner));
-        // Two junctions side by side, at the same height so that the link
+        // Two gains side by side, at the same height so that the link
         // between them passes through the point halfway between the pins,
         // and a third one below.
         const float scale = ImGui::GetStyle().FontScaleDpi;
-        first_ = controller_.addEffect("mix", (corner + 150.0f) / scale, (corner + 200.0f) / scale);
-        second_ = controller_.addEffect("mix", (corner + 520.0f) / scale, (corner + 200.0f) / scale);
-        third_ = controller_.addEffect("mix", (corner + 520.0f) / scale, (corner + 480.0f) / scale);
+        first_ = controller_.addGain((corner + 150.0f) / scale, (corner + 200.0f) / scale);
+        second_ = controller_.addGain((corner + 520.0f) / scale, (corner + 200.0f) / scale);
+        third_ = controller_.addGain((corner + 520.0f) / scale, (corner + 480.0f) / scale);
     });
     wait(5);
 
@@ -126,12 +126,56 @@ SelfTest::SelfTest(Controller& controller, std::string reportPath)
     drag(firstOut, secondIn);
     click(onFirstTitle);
     tapKey(ImGuiKey_Delete);
-    check("Delete removes the selected effect and its links",
+    check("Delete removes the selected box and its links",
           [this] { return controller_.node(first_) == nullptr && controller_.links().empty(); });
 
-    run([this] {
+    // The gain's value, between its two pins.
+    const Place onValue = [=] {
+        const ImVec2 in = secondIn(), out = secondOut();
+        return ImVec2((in.x + out.x) * 0.5f, in.y);
+    };
+    const Place rightOfValue = [=] {
+        const ImVec2 middle = onValue();
+        return ImVec2(middle.x + 60.0f * ImGui::GetStyle().FontScaleDpi, middle.y);
+    };
+    auto where = std::make_shared<ImVec2>();
+    run([this, where] { *where = ImVec2(controller_.node(second_)->x, controller_.node(second_)->y); });
+    drag(onValue, rightOfValue);
+    check("dragging a gain's value to the right raises it", [this] { return controller_.node(second_)->gainDb > 0.0f; });
+    check("and leaves the box where it was", [this, where] {
+        const Node* node = controller_.node(second_);
+        return node->x == where->x && node->y == where->y;
+    });
+
+    auto gains = std::make_shared<int>(0);
+    const auto countGains = [this] {
+        int count = 0;
+        for (const Node& node : controller_.nodes()) count += node.kind == NodeKind::Gain ? 1 : 0;
+        return count;
+    };
+    run([gains, countGains] { *gains = countGains(); });
+    moveTo(emptySpot);
+    ctrlKey(ImGuiKey_A);
+    check("Ctrl+A opens the search", [] { return anyMenuOpen(); });
+    tapKey(ImGuiKey_Escape);
+    check("Escape closes it", [] { return !anyMenuOpen(); });
+    check("without adding anything", [gains, countGains] { return countGains() == *gains; });
+    ctrlKey(ImGuiKey_A);
+    wait(3);
+    run([] { ImGui::GetIO().AddInputCharactersUTF8("gain"); });
+    wait(3);
+    tapKey(ImGuiKey_Enter);
+    check("typing \"gain\" and Enter adds a gain", [gains, countGains] { return countGains() == *gains + 1; });
+    check("and closes the search", [] { return !anyMenuOpen(); });
+
+    run([this, countGains] {
         controller_.removeNode(second_);
         controller_.removeNode(third_);
+        std::vector<int> added;
+        for (const Node& node : controller_.nodes()) {
+            if (node.kind == NodeKind::Gain) added.push_back(node.uid);
+        }
+        for (int uid : added) controller_.removeNode(uid);
         char line[80];
         snprintf(line, sizeof(line), failures_ ? "%d check(s) FAILED\n" : "all checks passed\n", failures_);
         report_ += line;
@@ -218,6 +262,14 @@ void SelfTest::drag(Place from, Place to) {
     }
     wait(3);
     press(0, false);
+}
+
+void SelfTest::ctrlKey(ImGuiKey key) {
+    run([] { ImGui::GetIO().AddKeyEvent(ImGuiMod_Ctrl, true); });
+    wait(2);
+    tapKey(key);
+    run([] { ImGui::GetIO().AddKeyEvent(ImGuiMod_Ctrl, false); });
+    wait(2);
 }
 
 void SelfTest::tapKey(ImGuiKey key) {

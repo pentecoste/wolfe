@@ -18,6 +18,7 @@ struct NodeDescription {
     std::string target;  // "device", "process" or (Wolfe's devices) "name" in the file; empty for effects
     std::string serial;  // Wolfe's devices: their identity for Windows; made from the id when empty
     std::string label;   // optional name to show instead of the id
+    double gainDb = 0.0; // "gain" nodes
     bool hasPosition = false;  // where the graphical editor drew it
     float x = 0, y = 0;
 };
@@ -32,13 +33,6 @@ struct GraphDescription {
     bool closeToTray = true;  // graphical editor: closing the window keeps it running
     std::vector<NodeDescription> nodes;
     std::vector<LinkDescription> links;
-    // Graphical editor: where the user put boxes that are not nodes of the
-    // graph (applications), by the editor's name for them.
-    struct Place {
-        std::string id;
-        float x = 0, y = 0;
-    };
-    std::vector<Place> layout;
 };
 
 bool isDeviceType(const std::string& type);  // input, loopback, output

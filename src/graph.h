@@ -84,6 +84,8 @@ public:
     void addLink(const std::string& from, const std::string& to, float gain = 1.0f);
     void removeLink(const std::string& from, const std::string& to);
     void setLinkGain(const std::string& from, const std::string& to, float gain);
+    // The gain of an effect that has one (see Effect::setGain), as a factor.
+    void setEffectGain(const std::string& id, float gain);
 
     // Extra age given to the audio on top of the minimum, to absorb timing
     // irregularities. More is safer, less is faster. Applies to nodes added later.
@@ -143,7 +145,8 @@ private:
     void runCycle(Plan& plan, int64_t cycle, const std::string& leaderId, float* leaderOut);
 
     std::map<std::string, std::unique_ptr<Input>> inputs_;
-    std::map<std::string, std::string> effects_;  // id -> type
+    // Each effect node's one instance, kept from plan to plan.
+    std::map<std::string, std::shared_ptr<Effect>> effects_;
     std::map<std::string, OutputNode> outputs_;
     std::map<std::string, std::shared_ptr<VirtualDevice>> virtuals_;
     // Wolfe's speakers as captured from their endpoints: Windows hands over

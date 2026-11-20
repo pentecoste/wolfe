@@ -1,24 +1,24 @@
 {
-  // Microphone with noise suppression, plus the Soundrio soundboard, sent to
-  // the people you talk to. The suppression is applied to the microphone
-  // only, before the soundboard is mixed in.
+  // The microphone plus the Soundrio soundboard, sent to the people you talk
+  // to, with the soundboard a little quieter than your voice. You hear the
+  // soundboard on your default playback device.
   //
   // In Windows' settings (Settings > System > Sound > Volume mixer) have
   // Soundrio play on "Wolfe Soundboard". In Mumble, Discord or wherever
   // friends should hear this, choose "Wolfe Chat" as the microphone and turn
   // off that program's own noise suppression: it would treat the soundboard
-  // as noise. You hear the soundboard on your default playback device.
+  // as noise.
   "nodes": [
     { "id": "soundboard", "type": "virtual_speaker", "name": "Wolfe Soundboard" },
     { "id": "chat",       "type": "virtual_mic",     "name": "Wolfe Chat" },
     { "id": "mic",        "type": "input",           "device": "Razer Seiren Mini" },
-    { "id": "denoise",    "type": "rnnoise" },
+    { "id": "quieter",    "type": "gain",            "gain_db": -6 },
     { "id": "phones",     "type": "output",          "device": "default" }
   ],
   "links": [
-    { "from": "mic",        "to": "denoise" },
-    { "from": "denoise",    "to": "chat" },
-    { "from": "soundboard", "to": "chat" },
+    { "from": "mic",        "to": "chat" },
+    { "from": "soundboard", "to": "quieter" },
+    { "from": "quieter",    "to": "chat" },
     { "from": "soundboard", "to": "phones" }
   ]
 }

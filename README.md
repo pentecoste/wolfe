@@ -1,14 +1,14 @@
 # Wolfe
 
-An audio patchbay for Windows: microphones, applications, effects and
-headphones are boxes, and you decide what goes where. The idea is what
-qpwgraph or Carla give you on Linux, built on what Windows offers.
+An audio patchbay for Windows: microphones, speakers and gains are boxes,
+and you decide what goes where. The idea is what qpwgraph or Carla give you
+on Linux, built on what Windows offers.
 
 Wolfe is one big node of its own. It has playback and recording devices of
-its own, which Windows lists like any sound card: in Windows' settings you
-have an application play on one of Wolfe's speakers, or record from one of
-Wolfe's microphones, and inside Wolfe you connect those to anything else,
-mixed and processed as you like.
+its own, which Windows lists like any sound card. Which applications play on
+them or record from them is chosen in Windows' settings; inside Wolfe they
+are boxes like your microphone and your headphones, and you link them as you
+like.
 
 There are two programs on the same engine: `wolfe.exe`, a window with the
 patch canvas that keeps running in the notification area, and `wolfe-cli.exe`,
@@ -40,68 +40,56 @@ This produces, in `build/`:
 
 ## The window
 
-Audio flows from left to right:
+The canvas shows only what you put on it. **Ctrl+A** opens a search for
+something to add: type part of its name, and Enter adds the one highlighted
+(Up and Down choose another). The Add menu, and a right click on the canvas,
+offer the same things.
 
-    applications   recording devices      effects    playback devices      applications
-    that play      Wolfe's speakers                  Wolfe's microphones   that record
-                   what is played on a device
+| box              | what it is                                                                          | pin   |
+|------------------|-------------------------------------------------------------------------------------|-------|
+| Microphone       | a recording device of the computer (a microphone, the far end of a virtual cable)  | out   |
+| Wolfe speaker    | a playback device of Wolfe's own: what applications play on it comes into Wolfe     | out   |
+| Gain             | passes on what is linked into it, louder or quieter                                 | both  |
+| Speaker          | a playback device of the computer (headphones, speakers)                           | in    |
+| Wolfe microphone | a recording device of Wolfe's own: applications that record from it hear what is linked into it | in |
 
-- **Applications** are shown where Windows has them: one that plays is on the
-  far left, with a pale link to the device it plays on; one that records is on
-  the far right, with a pale link from the device it records from. An
-  application that does both has a box on each side. Wolfe never changes these
-  links: where an application plays and records is chosen in Windows
-  (Settings > System > Sound > Volume mixer, also in the Wolfe menu and in an
-  application's right-click menu) or in the application's own settings.
-- **Wolfe's speakers** (Add > Wolfe speaker) are playback devices of Wolfe's
-  own. What applications play on them comes into Wolfe: give an application
-  one in Windows' settings, and link the speaker to wherever it should be
-  heard, through effects if you like.
-- **Wolfe's microphones** (Add > Wolfe microphone) are recording devices of
-  Wolfe's own. Applications that record from them hear whatever is linked into
-  them: your microphone through noise suppression, the game but not the music...
-  (Windows shows them as line inputs, so that it does not apply its voice
-  processing to them.)
-- **What is played on a device** (Add > What is played on, or a playback
-  device's right-click menu) takes everything that is played on a playback
-  device as a source.
-- **Recording and playback devices** are your microphones, headphones,
-  speakers, and the two ends of a virtual cable if you have one.
+Wolfe takes audio from microphones and from its own speakers, and sends it to
+speakers and to its own microphones. It does not show applications and does
+not move them: give an application one of Wolfe's devices in Windows'
+settings (Settings > System > Sound > Volume mixer) or in the application's
+own, and link that device in Wolfe. Windows shows Wolfe's microphones as line
+inputs, so that it does not apply its voice processing to them.
 
-Links drawn bright are carried by Wolfe, each with its own gain. With these
-pieces any mix can go anywhere: every application that plays on a Wolfe
-speaker can be taken apart from the others, and every application that
-records from a Wolfe microphone can be given a mix of its own.
-
-- Drag from a pin to another pin to connect them. A pin takes any number of
-  links: drag from it again to send the same thing somewhere else as well, or
-  onto it again to add something to what it already gets.
+- Drag from a pin to another pin to link them. A pin takes any number of
+  links: links into the same box are added together, and a box can feed any
+  number of others. A link that would bring audio back to where it came from
+  is refused, also through the two ends of a virtual cable.
 - Drag a link itself to move it: the end nearer to where you took hold comes
   off, and goes onto the pin you let go on. Pulled well away and let go over
   nothing, the link is removed; so it is with Ctrl+click, or by clicking it
   and pressing Delete.
-- Right-click a link for its menu (gain, remove), a box for its own, the
-  canvas (or the Add menu) to add something. Effects, Wolfe's devices and
-  boxes for devices that are unplugged can be removed (Delete).
+- A gain's value is dragged left or right; a double click lets you type one,
+  from -100 to +40 dB.
+- Right-click a box or a link for its menu. Delete removes what is selected.
 - Middle button, or Alt + drag, moves the view. Hover a box or a link for
   details.
 
-A link that would bring audio back to where it came from is refused, also
-when the way back goes through a device: from a playback device into what is
-played on it, or from one end of a virtual cable to the other.
-
-Removing one of Wolfe's devices takes it away from Windows, which then sends
+Removing one of Wolfe's devices is asked first: Windows loses it, and sends
 the applications that were given it back to the default device. A new device
 with the same name is a new device to Windows. Wolfe's devices exist while
-Wolfe runs, whether or not anything is linked to them.
+Wolfe runs, whether or not anything is linked to them; a device of the
+computer is only opened while something is linked to it.
 
 ### What a box says
 
-`live` when Wolfe is using it, `in use` when only Windows is (an application
-plays or records there), `idle` otherwise; `ready` for one of Wolfe's devices
-that Windows has. The bar is the level as Windows measures it (a recording
-device only has a level while something records from it). A box with an
-orange outline is connected but not working: its text says why.
+`live` when Wolfe is using it, `not linked` when nothing is linked to it,
+`not plugged in` when the device is missing (the box stays, and works again
+when the device comes back). One of Wolfe's devices is `ready` once Windows
+has it, and a microphone of Wolfe's is `in use` while an application records
+from it. The bar is the level as Windows measures it (a recording device only
+has a level while something records from it). A box with an orange outline is
+linked but not working: its text says why. When a link cannot be made, the
+reason appears next to the mouse.
 
 The graph is saved by itself in `%APPDATA%\Wolfe\graph.json` and loaded again
 at the next start. Closing the window leaves Wolfe running in the notification
@@ -111,8 +99,6 @@ Exit is in that menu and on the icon. What the engine reports is written to
 
     wolfe.exe                    open the window
     wolfe.exe --tray             start hidden in the notification area
-    wolfe.exe --import <file>    replace the graph with the one in a file
-                                 (a .json file given without --import does the same)
     wolfe.exe --file <file>      keep the graph in that file instead
     wolfe.exe --selftest <file>  try the mouse and keyboard gestures by itself
                                  and write what happened to a file
@@ -131,33 +117,30 @@ would arrive twice.
 
     {
       "nodes": [
-        { "id": "music",   "type": "virtual_speaker", "name": "Wolfe Music" },
-        { "id": "chat",    "type": "virtual_mic",     "name": "Wolfe Chat" },
-        { "id": "mic",     "type": "input",           "device": "Razer Seiren Mini" },
-        { "id": "denoise", "type": "rnnoise" },
-        { "id": "phones",  "type": "output",          "device": "Headphones" }
+        { "id": "music",  "type": "virtual_speaker", "name": "Wolfe Music" },
+        { "id": "chat",   "type": "virtual_mic",     "name": "Wolfe Chat" },
+        { "id": "mic",    "type": "input",           "device": "Razer Seiren Mini" },
+        { "id": "quiet",  "type": "gain",            "gain_db": -12 },
+        { "id": "phones", "type": "output",          "device": "Headphones" }
       ],
       "links": [
-        { "from": "mic",     "to": "denoise" },
-        { "from": "denoise", "to": "chat" },
-        { "from": "music",   "to": "phones" },
-        { "from": "music",   "to": "chat", "gain_db": -12 }
+        { "from": "mic",   "to": "chat" },
+        { "from": "music", "to": "phones" },
+        { "from": "music", "to": "quiet" },
+        { "from": "quiet", "to": "chat" }
       ]
     }
 
 The window writes the same format, adding where each box is drawn. Comments
 (`//`) are allowed when writing one by hand. Node types:
 
-| type              | what it is                                            | needs     |
-|-------------------|-------------------------------------------------------|-----------|
-| `virtual_speaker` | one of Wolfe's playback devices                       | `name`    |
-| `virtual_mic`     | one of Wolfe's recording devices                      | `name`    |
-| `input`           | a recording device (microphone, far end of a cable)   | `device`  |
-| `loopback`        | everything being played on a playback device          | `device`  |
-| `output`          | a playback device (headphones, near end of a cable)   | `device`  |
-| `app`             | everything one application plays (console only)       | `process` |
-| `mix`             | a junction: the sum of its inputs, unchanged          |           |
-| `rnnoise`         | noise suppression for voice (its output is mono)      |           |
+| type              | what it is                                  | needs    |
+|-------------------|---------------------------------------------|----------|
+| `virtual_speaker` | one of Wolfe's playback devices             | `name`   |
+| `virtual_mic`     | one of Wolfe's recording devices            | `name`   |
+| `input`           | a recording device                          | `device` |
+| `output`          | a playback device                           | `device` |
+| `gain`            | louder or quieter: `gain_db`, 0 if left out |          |
 
 `device` is `default`, or any part of the device name as `wolfe-cli devices`
 shows it. Devices that are missing are retried every second.
@@ -168,15 +151,17 @@ one and writes it in the file (`"serial"`); a hand-written node without one
 gets one made from its id. Keep both as they are once applications use the
 device.
 
-`process` is an executable name (`chrome.exe`) or part of its full path
-(`\\Soundrio\\`). Windows captures one process together with the processes it
-started directly; Wolfe looks at the whole family and captures the process
-that is actually playing. The window does not offer this: an application
-played on a Wolfe speaker is the way to take it apart.
+Several links into the same node are added together. `"margin_ms"` at the
+top level (default 4) is extra delay given to every source; raise it if the
+report shows `late` counts that keep growing.
 
-Several links into the same node are added together. `gain_db` on a link is
-optional. `"margin_ms"` at the top level (default 4) is extra delay given to
-every source; raise it if the report shows `late` counts that keep growing.
+The console program also knows a few things the window does not offer:
+`loopback` nodes (everything played on a playback device, `device`), `app`
+nodes (everything one application plays, `process`), `mix` and `rnnoise`
+(noise suppression for voice) nodes, and `gain_db` on a link. In a file the
+window loads, `mix` and `rnnoise` nodes become gains at 0 dB (so that their
+links stay), links lose their gain, and the rest is left out; its log says
+what was changed.
 
 ## Reading the report
 
@@ -239,12 +224,10 @@ device and the application.
 - Windows makes a new device the default one when it first appears, and
   again every time it comes back while it is the default Windows remembers:
   a Wolfe microphone would then be the default every time Wolfe starts.
-  Wolfe says when that happens; choose your own device as the default once
-  (Settings > System > Sound) and Windows remembers that instead.
-- A program that listens to a playback device (a screen recorder, a game
-  streaming host) is not shown: Windows lists it exactly like a program that
-  plays on that device.
-- An application muted in the Windows volume mixer is silent here too.
+  Choose your own device as the default once (Settings > System > Sound) and
+  Windows remembers that instead.
+- An application muted in the Windows volume mixer is silent on Wolfe's
+  devices too.
 
 ## Third-party code
 

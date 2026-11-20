@@ -68,7 +68,7 @@ add_executable(wolfe WIN32
 target_compile_options(wolfe PRIVATE -Wall -Wextra)
 # Windows' own constants (cursors and the like) in their wide-character form.
 target_compile_definitions(wolfe PRIVATE UNICODE _UNICODE)
-target_link_libraries(wolfe PRIVATE wolfe_app imgui comdlg32 shell32)
+target_link_libraries(wolfe PRIVATE wolfe_app imgui shell32)
 # -static: no MinGW runtime DLLs needed next to the exe.
 target_link_options(wolfe PRIVATE -static)
 

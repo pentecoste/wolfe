@@ -33,6 +33,7 @@ private:
     void ctrlClick(Place where);
     void drag(Place from, Place to);
     void tapKey(ImGuiKey key);
+    void ctrlKey(ImGuiKey key);  // the key with Ctrl held
     void check(const char* what, std::function<bool()> condition);
     bool linked(int fromUid, int toUid) const;   // Wolfe carries a link between them
     bool hasLink(int fromUid, int toUid) const;  // ...and it is the only link there is
@@ -45,7 +46,7 @@ private:
     // Each step is called once per frame until it returns true.
     std::vector<std::function<bool()>> steps_;
     size_t current_ = 0;
-    int first_ = 0, second_ = 0, third_ = 0;  // the effect nodes the gestures are tried on
+    int first_ = 0, second_ = 0, third_ = 0;  // the gains the gestures are tried on
 };
 
 }  // namespace wolfe

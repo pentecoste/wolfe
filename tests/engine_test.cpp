@@ -278,6 +278,34 @@ void testRnnoiseNode() {
     expect(energyOut < energyIn, "it does remove something");
 }
 
+// The "gain" node multiplies by its gain; a new gain is reached over one
+// cycle, without a jump that would click.
+void testGainNode() {
+    printf("gain node\n");
+    std::shared_ptr<Effect> node = createEffect("gain");
+    float stereo[kQuantum * kChannels];
+    auto fill = [&] {
+        for (int i = 0; i < kQuantum * kChannels; i++) stereo[i] = 0.5f;
+    };
+    fill();
+    node->process(stereo);
+    expect(stereo[0] == 0.5f && stereo[kQuantum * kChannels - 1] == 0.5f, "at first it changes nothing");
+
+    node->setGain(0.25f);
+    fill();
+    node->process(stereo);
+    float largestStep = 0.0f;
+    for (int i = 1; i < kQuantum; i++) largestStep = std::max(largestStep, std::fabs(stereo[i * 2] - stereo[(i - 1) * 2]));
+    expect(stereo[0] < 0.5f && stereo[0] > 0.49f, "a new gain starts from the old one");
+    expect(std::fabs(stereo[(kQuantum - 1) * 2] - 0.125f) < 1e-6f && largestStep < 0.001f,
+           "and arrives at the end of the cycle, a little at a time");
+    expect(stereo[(kQuantum - 1) * 2 + 1] == stereo[(kQuantum - 1) * 2], "on both channels");
+
+    fill();
+    node->process(stereo);
+    expect(stereo[0] == 0.125f && stereo[kQuantum * kChannels - 1] == 0.125f, "then it stays there");
+}
+
 }  // namespace
 
 int main() {
@@ -292,6 +320,7 @@ int main() {
     testBursts();
     testLateBlocks();
     testRnnoiseNode();
+    testGainNode();
     printf(g_failures ? "\n%d check(s) FAILED\n" : "\nall checks passed\n", g_failures);
     return g_failures ? 1 : 0;
 }
