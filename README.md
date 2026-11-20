@@ -72,8 +72,7 @@ inputs, so that it does not apply its voice processing to them.
 - A gain's value is dragged left or right; a double click lets you type one,
   from -100 to +40 dB.
 - Right-click a box or a link for its menu. Delete removes what is selected.
-- Middle button, or Alt + drag, moves the view. Hover a box or a link for
-  details.
+- Middle button, or Alt + drag, moves the view.
 
 Removing one of Wolfe's devices is asked first: Windows loses it, and sends
 the applications that were given it back to the default device. A new device

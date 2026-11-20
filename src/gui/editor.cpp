@@ -182,10 +182,6 @@ void Editor::drawMenuBar() {
         if (ImGui::MenuItem("Keep running when the window is closed", nullptr, tray)) controller_.setCloseToTray(!tray);
         const bool apps = controller_.showApps();
         if (ImGui::MenuItem("Show applications in boxes", nullptr, apps)) controller_.setShowApps(!apps);
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("Under a device's name, the applications playing on it or recording from it.\n"
-                              "Hovering a box lists them either way.");
-        }
         ImGui::Separator();
         if (ImGui::MenuItem("Exit")) exitRequested = true;
         ImGui::EndMenu();
@@ -254,18 +250,12 @@ void Editor::addItems(ImVec2 screenPosition) {
     for (const Choice& choice : all) {
         if (choice.kind != Choice::Gain) continue;
         if (ImGui::MenuItem("Gain")) choose(choice, screenPosition);
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Passes on what is linked into it, louder or quieter.");
     }
     // (The computer's devices are added from the search.)
     ImGui::Separator();
     for (const Choice& choice : all) {
         if (choice.kind != Choice::WolfeSpeaker && choice.kind != Choice::WolfeMic) continue;
         if (ImGui::MenuItem((choice.title + "...").c_str())) choose(choice, screenPosition);
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip(choice.kind == Choice::WolfeMic
-                                  ? "A recording device of Wolfe's own: applications that record from it hear what you link into it."
-                                  : "A playback device of Wolfe's own: what applications play on it comes into Wolfe.");
-        }
     }
 }
 
@@ -393,24 +383,18 @@ void Editor::askToRemove(int nodeUid) {
 // The windows that ask something before going on.
 void Editor::drawDialogs() {
     const ImGuiWindowFlags flags = ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings;
+    // The title says which kind; the id after ### keeps it one window.
+    const char* const namingTitle = naming_ == 2 ? "New Wolfe microphone###naming" : "New Wolfe speaker###naming";
     if (naming_ && !namingOpened_) {
-        ImGui::OpenPopup("Name the new device");
+        ImGui::OpenPopup(namingTitle);
         namingOpened_ = true;
     }
-    if (ImGui::BeginPopupModal("Name the new device", nullptr, flags)) {
+    if (ImGui::BeginPopupModal(namingTitle, nullptr, flags)) {
         const bool recording = naming_ == 2;
-        ImGui::TextUnformatted(recording ? "A recording device of Wolfe's own. Applications that record from it hear\n"
-                                           "whatever you link into it here."
-                                         : "A playback device of Wolfe's own. What applications play on it comes into\n"
-                                           "Wolfe, and goes wherever you link it here.");
-        ImGui::Spacing();
         if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
         ImGui::SetNextItemWidth(320.0f * scale_);
         const bool entered = ImGui::InputText("Name", name_, sizeof(name_), ImGuiInputTextFlags_EnterReturnsTrue);
-        ImGui::TextDisabled("Windows shows it with this name. Which applications use it is chosen\n"
-                            "in Windows' settings.");
         if (!nameProblem_.empty()) ImGui::TextColored(kProblemColour, "%s", nameProblem_.c_str());
-        ImGui::Spacing();
         if (ImGui::Button("Create") || entered) {
             const int uid = controller_.addWolfeDevice(recording, name_, 0, 0, &nameProblem_);
             if (uid) {
@@ -441,8 +425,7 @@ void Editor::drawDialogs() {
             ImGui::CloseCurrentPopup();
         } else {
             ImGui::Text("Remove \"%s\"?", node->label.c_str());
-            ImGui::TextUnformatted("Windows will no longer have it. Applications that were given it go back to the\n"
-                                   "default device, and a new device with the same name would be new to Windows.");
+            ImGui::TextDisabled("Applications using it go back to the default device.");
             ImGui::Spacing();
             if (ImGui::Button("Remove")) {
                 controller_.removeNode(removing_);
@@ -702,8 +685,10 @@ void Editor::drawCanvas() {
             ImGui::OpenPopup("canvas menu");
         }
     } else if (!ImGui::IsMouseDown(ImGuiMouseButton_Left) && (flash_.empty() || now_ >= flashUntil_)) {
-        if (overNode) ImGui::SetTooltip("%s", controller_.describeNode(hoveredNode).c_str());
-        else if (overLink) ImGui::SetTooltip("%s", controller_.describeLink(hoveredLink).c_str());
+        const std::string text = overNode ? controller_.describeNode(hoveredNode)
+                                 : overLink ? controller_.describeLink(hoveredLink)
+                                            : std::string();
+        if (!text.empty()) ImGui::SetTooltip("%s", text.c_str());
     }
 }
 

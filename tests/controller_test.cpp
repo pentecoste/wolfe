@@ -300,15 +300,14 @@ void testApplications() {
         const std::vector<AppUse>& onMic = controller.node(mic)->apps;
         expect(onMic.size() == 1 && onMic[0].name == "Chat", "the microphone: who records from it, not who plays");
         expect(controller.node(gain)->apps.empty(), "a gain has none");
-        const std::string tooltip = controller.describeNode(phones);
-        expect(tooltip.find("Game  (playing)") != std::string::npos &&
-                   tooltip.find("Chat  (stream open") != std::string::npos,
+        expect(controller.describeNode(phones) == "Game (playing)\nChat (silent)",
                "the tooltip lists them all, saying which are silent");
+        expect(controller.describeNode(mic) == "Chat (recording)", "on a recording device, who records");
 
         controller.apply(system());
         expect(controller.node(phones)->apps.empty(), "an application that closes its stream goes away");
-        expect(controller.describeNode(phones).find("No application plays on it") != std::string::npos,
-               "and the tooltip says nobody is there");
+        expect(controller.describeNode(phones).empty() && controller.describeNode(gain).empty(),
+               "with nothing to list there is no tooltip");
 
         expect(controller.showApps(), "boxes list applications unless told not to");
         controller.setShowApps(false);

@@ -168,6 +168,22 @@ SelfTest::SelfTest(Controller& controller, std::string reportPath)
     check("typing \"gain\" and Enter adds a gain", [gains, countGains] { return countGains() == *gains + 1; });
     check("and closes the search", [] { return !anyMenuOpen(); });
 
+    // A device of Wolfe's is named first. (Not created: that would offer it to Windows.)
+    const auto countNodes = [this] { return (int)controller_.nodes().size(); };
+    auto nodes = std::make_shared<int>(0);
+    run([nodes, countNodes] { *nodes = countNodes(); });
+    ctrlKey(ImGuiKey_A);
+    wait(3);
+    run([] { ImGui::GetIO().AddInputCharactersUTF8("wolfe speaker"); });
+    wait(3);
+    tapKey(ImGuiKey_Enter);
+    wait(3);
+    // (The search closed at Enter: what is open now is the window asking for the name.)
+    check("choosing a Wolfe speaker asks for its name", [] { return anyMenuOpen(); });
+    tapKey(ImGuiKey_Escape);
+    check("Escape closes that without making anything",
+          [nodes, countNodes] { return !anyMenuOpen() && countNodes() == *nodes; });
+
     run([this, countGains] {
         controller_.removeNode(second_);
         controller_.removeNode(third_);

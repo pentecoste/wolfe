@@ -718,77 +718,22 @@ void Controller::watchMain() {
 // ---------------------------------------------------------------------------
 
 std::string Controller::describeNode(int nodeUid) {
+    // What the box itself does not say: every application on its device,
+    // also those with only a silent stream open.
     const Node* found = node(nodeUid);
     if (!found) return {};
-    const Node& node = *found;
+    const bool recording = found->kind == NodeKind::Input || found->kind == NodeKind::WolfeMic;
     std::string text;
-    char line[300];
-
-    switch (node.kind) {
-        case NodeKind::Input: text = "A recording device of this computer: what it records comes into Wolfe.\n"; break;
-        case NodeKind::Output: text = "A playback device of this computer: Wolfe plays on it what is linked into it.\n"; break;
-        case NodeKind::WolfeSpeaker:
-            text = "One of Wolfe's own playback devices: what applications play on it comes into Wolfe.\n"
-                   "In Windows it is called \"" + node.label + "\"; which applications play on it is chosen there.\n";
-            break;
-        case NodeKind::WolfeMic:
-            text = "One of Wolfe's own recording devices: applications that record from it hear what is linked into it.\n"
-                   "In Windows it is called \"" + node.label + "\"; which applications record from it is chosen there.\n";
-            break;
-        case NodeKind::Gain:
-            snprintf(line, sizeof(line),
-                     "Passes on what is linked into it, %+.1f dB.\n"
-                     "Drag the value left or right, or double-click it to type one.",
-                     node.gainDb);
-            return line;
+    for (const AppUse& app : found->apps) {
+        if (!text.empty()) text += "\n";
+        text += app.name + (app.active ? (recording ? " (recording)" : " (playing)") : " (silent)");
     }
-    if (node.present) {
-        const bool recording = node.kind == NodeKind::Input || node.kind == NodeKind::WolfeMic;
-        if (node.apps.empty()) {
-            text += recording ? "No application records from it.\n" : "No application plays on it.\n";
-        } else {
-            text += recording ? "Recorded from by:\n" : "Played on by:\n";
-            for (const AppUse& app : node.apps) {
-                text += "    " + app.name;
-                text += app.active ? (recording ? "  (recording)\n" : "  (playing)\n") : "  (stream open, nothing flowing)\n";
-            }
-        }
-    }
-    if (node.isDevice() && !node.present) text += "Not plugged in.\n";
-    if (node.isWolfeDevice() && !node.present && node.healthy) text += "Windows does not have it yet.\n";
-
-    if (!node.active) {
-        text += "Wolfe is not using it: nothing is linked to it.";
-        return text;
-    }
-    text += node.status + "\n";
-
-    if (node.kind == NodeKind::Output) {
-        Graph::OutputReport report = graph_.outputReport(node.id);
-        snprintf(line, sizeof(line), "Keeps %.0f ms of audio queued. Ran out of audio %llu times.\n",
-                 report.output.queuedMs, (unsigned long long)report.output.underruns);
-        text += line;
-        for (const Graph::OutputReport::Source& source : report.sources) {
-            const Node* from = findById(source.id);
-            const std::string name = from ? from->label : source.id;
-            if (source.stats.active) {
-                snprintf(line, sizeof(line), "%s: %.0f ms behind, clock %+.0f ppm, %llu frames lost\n", name.c_str(),
-                         source.stats.targetMs, source.stats.ratioPpm, (unsigned long long)source.stats.lateFrames);
-            } else {
-                snprintf(line, sizeof(line), "%s: silent\n", name.c_str());
-            }
-            text += line;
-        }
-    }
-    while (!text.empty() && text.back() == '\n') text.pop_back();
     return text;
 }
 
 std::string Controller::describeLink(int linkUid) const {
     for (const Connection& link : links_) {
-        if (link.uid != linkUid) continue;
-        return node(link.from)->label + "  ->  " + node(link.to)->label +
-               "\nDrag it by one end to move that end; pull it away, or Ctrl+click it, to remove it.";
+        if (link.uid == linkUid) return node(link.from)->label + "  ->  " + node(link.to)->label;
     }
     return {};
 }
