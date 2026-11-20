@@ -240,7 +240,10 @@ int pace(std::string spec, double seconds) {
     check(client->SetEventHandle(event), "event");
     UINT32 bufferFrames = 0;
     check(client->GetBufferSize(&bufferFrames), "buffer size");
-    printf("period %d frames, buffer %u frames\n", devicePeriodFrames(client.get()), bufferFrames);
+    REFERENCE_TIME latency = 0;
+    client->GetStreamLatency(&latency);
+    printf("period %d frames, buffer %u frames, stream latency %.1f ms (as the driver declares it)\n",
+           devicePeriodFrames(client.get()), bufferFrames, latency / 10000.0);
 
     ComPtr<IAudioRenderClient> render;
     ComPtr<IAudioCaptureClient> capture;
@@ -493,6 +496,12 @@ int record(std::vector<Recorder>& recorders, double seconds, const std::vector<s
         printf("%s frames=%zu arrival=%.6f stamp=%.6f discontinuities=%d\n", paths[i].c_str(),
                recorder.stereo.size() / 2, recorder.clock.offset(), recorder.firstStamp, recorder.discontinuities);
     }
+    // Where "arrival" times start on the performance counter (the clock of
+    // "stamp"), to compare them with other programs.
+    LARGE_INTEGER counter, frequency;
+    QueryPerformanceCounter(&counter);
+    QueryPerformanceFrequency(&frequency);
+    printf("arrival zero=%.6f\n", (double)counter.QuadPart / (double)frequency.QuadPart - nowSeconds());
     return 0;
 }
 

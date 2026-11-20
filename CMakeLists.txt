@@ -86,6 +86,12 @@ target_compile_options(wolfe-sigtool PRIVATE -Wall -Wextra)
 target_link_libraries(wolfe-sigtool PRIVATE wolfe_engine)
 target_link_options(wolfe-sigtool PRIVATE -static)
 
+# Prototype: a USB audio device served over USB/IP, for usbip-win2 to attach.
+add_executable(wolfe-uacproto tools/uacproto.cpp)
+target_compile_options(wolfe-uacproto PRIVATE -Wall -Wextra)
+target_link_libraries(wolfe-uacproto PRIVATE ws2_32 avrt winmm)
+target_link_options(wolfe-uacproto PRIVATE -static)
+
 # Checks of the drift compensation that run without any audio device.
 add_executable(wolfe-enginetest tests/engine_test.cpp)
 target_compile_options(wolfe-enginetest PRIVATE -Wall -Wextra)
