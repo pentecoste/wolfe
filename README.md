@@ -43,7 +43,8 @@ This produces, in `build/`:
 The canvas shows only what you put on it. **Ctrl+A** opens a search for
 something to add: type part of its name, and Enter adds the one highlighted
 (Up and Down choose another). The Add menu, and a right click on the canvas,
-offer the same things.
+offer the search, a gain and Wolfe's own devices; the computer's microphones
+and speakers are added from the search.
 
 | box              | what it is                                                                          | pin   |
 |------------------|-------------------------------------------------------------------------------------|-------|

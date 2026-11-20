@@ -226,7 +226,8 @@ void Editor::openSearch(ImVec2 screenPosition) {
     searchAt_ = screenPosition;
 }
 
-// The Add menu, in the menu bar and on a right click on the canvas.
+// The Add menu, in the menu bar and on a right click on the canvas: the
+// search, and the boxes that are not a device of the computer.
 void Editor::addItems(ImVec2 screenPosition) {
     if (ImGui::MenuItem("Search...", "Ctrl+A")) openSearch(screenPosition);
     ImGui::Separator();
@@ -236,19 +237,7 @@ void Editor::addItems(ImVec2 screenPosition) {
         if (ImGui::MenuItem("Gain")) choose(choice, screenPosition);
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Passes on what is linked into it, louder or quieter.");
     }
-    for (bool recording : {true, false}) {
-        if (!ImGui::BeginMenu(recording ? "Microphone" : "Speaker")) continue;
-        const Choice::Kind kind = recording ? Choice::Microphone : Choice::Speaker;
-        bool any = false;
-        for (const Choice& choice : all) {
-            if (choice.kind != kind) continue;
-            any = true;
-            // Without the "Microphone: " in front, which the menu already says.
-            if (ImGui::MenuItem(choice.title.substr(choice.title.find(": ") + 2).c_str())) choose(choice, screenPosition);
-        }
-        if (!any) ImGui::TextDisabled(recording ? "every recording device is on the canvas" : "every playback device is on the canvas");
-        ImGui::EndMenu();
-    }
+    // (The computer's devices are added from the search.)
     ImGui::Separator();
     for (const Choice& choice : all) {
         if (choice.kind != Choice::WolfeSpeaker && choice.kind != Choice::WolfeMic) continue;
