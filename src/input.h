@@ -26,6 +26,9 @@ struct InputSpec {
     // Process: an executable name ("chrome.exe") or a fragment of its full path
     // ("\\Soundrio\\"), which is how to single out one Java program among many.
     std::string target;
+    // Loopback of one of Wolfe's own speakers, found by its serial number
+    // instead of `target` (which then only names it in messages).
+    std::string wolfeSerial;
 };
 
 // Captures audio from outside the graph into a SourceBuffer, on its own thread.
@@ -40,6 +43,8 @@ public:
 
     const std::shared_ptr<SourceBuffer>& buffer() const { return buffer_; }
     std::string status() const;
+    // A stream is open and delivering (or ready to deliver) audio.
+    bool capturing() const { return capturing_.load(std::memory_order_relaxed); }
 
 private:
     void threadMain();
@@ -71,6 +76,7 @@ private:
     double recentBlock_ = 0;     // typical size of the blocks delivered lately, in frames
     int publishedBlock_ = 0;     // the same, as last told to the readers
 
+    std::atomic<bool> capturing_{false};
     mutable std::mutex statusMutex_;
     std::string status_ = "stopped";
 };

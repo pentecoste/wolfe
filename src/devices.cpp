@@ -1,8 +1,12 @@
 #include "devices.h"
 
 #include "common.h"
+#include "virtual_devices.h"
+
+#include <cfgmgr32.h>
 
 #include <cmath>
+#include <cstdio>
 
 namespace wolfe {
 
@@ -10,6 +14,10 @@ namespace {
 
 const PROPERTYKEY kFriendlyNameKey = {
     {0xa45c254e, 0xdf1c, 0x4efd, {0x80, 0x20, 0x67, 0xd1, 0x46, 0xa8, 0x50, 0xe0}}, 14};
+// The device instance of the hardware an endpoint belongs to, as
+// "{1}.USB\VID_1209&PID_0003&MI_00\3&3703FCA5&0&0000".
+const PROPERTYKEY kHardwareInstanceKey = {
+    {0xb3f8fa53, 0x0004, 0x438e, {0x90, 0x03, 0x51, 0xa4, 0x6e, 0x13, 0x9b, 0xfc}}, 2};
 const GUID kSubtypeIeeeFloat = {
     0x00000003, 0x0000, 0x0010, {0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71}};
 
@@ -44,6 +52,54 @@ std::string deviceName(IMMDevice* device) {
     return name;
 }
 
+std::string wolfeSerialOf(IMMDevice* device) {
+    ComPtr<IPropertyStore> properties;
+    if (FAILED(device->OpenPropertyStore(STGM_READ, properties.put()))) return {};
+    PROPVARIANT value;
+    PropVariantInit(&value);
+    std::wstring instance;
+    if (SUCCEEDED(properties->GetValue(kHardwareInstanceKey, &value)) && value.vt == VT_LPWSTR) instance = value.pwszVal;
+    PropVariantClear(&value);
+
+    // The endpoint belongs to the audio function of the USB device, whose
+    // parent is the device itself: "USB\VID_1209&PID_0003\<serial>".
+    const size_t prefix = instance.find(L"}.");
+    if (prefix != std::wstring::npos) instance.erase(0, prefix + 2);
+    wchar_t wanted[64];
+    swprintf(wanted, 64, L"USB\\VID_%04X&PID_", kWolfeVendor);
+    if (instance.compare(0, wcslen(wanted), wanted) != 0) return {};
+
+    DEVINST function = 0, parent = 0;
+    if (CM_Locate_DevNodeW(&function, instance.data(), CM_LOCATE_DEVNODE_PHANTOM) != CR_SUCCESS) return {};
+    if (CM_Get_Parent(&parent, function, 0) != CR_SUCCESS) return {};
+    wchar_t parentId[MAX_DEVICE_ID_LEN + 1] = {};
+    if (CM_Get_Device_IDW(parent, parentId, MAX_DEVICE_ID_LEN, 0) != CR_SUCCESS) return {};
+
+    std::wstring id = parentId;
+    bool ours = false;
+    for (uint16_t product : {kWolfeSpeakerProduct, kWolfeMicrophoneProduct}) {
+        wchar_t expected[64];
+        swprintf(expected, 64, L"USB\\VID_%04X&PID_%04X\\", kWolfeVendor, product);
+        if (_wcsnicmp(id.c_str(), expected, wcslen(expected)) == 0) ours = true;
+    }
+    if (!ours) return {};
+    return toUtf8(id.substr(id.find_last_of(L'\\') + 1));
+}
+
+ComPtr<IMMDevice> findWolfeDevice(EDataFlow flow, const std::string& serial) {
+    ComPtr<IMMDeviceEnumerator> enumerator = createEnumerator();
+    ComPtr<IMMDeviceCollection> collection;
+    if (FAILED(enumerator->EnumAudioEndpoints(flow, DEVICE_STATE_ACTIVE, collection.put()))) return {};
+    UINT count = 0;
+    collection->GetCount(&count);
+    for (UINT i = 0; i < count; i++) {
+        ComPtr<IMMDevice> device;
+        if (FAILED(collection->Item(i, device.put()))) continue;
+        if (_stricmp(wolfeSerialOf(device.get()).c_str(), serial.c_str()) == 0 && !serial.empty()) return device;
+    }
+    return {};
+}
+
 std::vector<DeviceInfo> listDevices(EDataFlow flow) {
     ComPtr<IMMDeviceEnumerator> enumerator = createEnumerator();
 
@@ -66,6 +122,7 @@ std::vector<DeviceInfo> listDevices(EDataFlow flow) {
         info.name = deviceName(device.get());
         info.id = deviceId(device.get());
         info.isDefault = !defaultId.empty() && info.id == defaultId;
+        info.wolfeSerial = wolfeSerialOf(device.get());
         devices.push_back(info);
     }
     return devices;

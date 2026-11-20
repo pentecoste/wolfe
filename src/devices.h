@@ -15,12 +15,20 @@ struct DeviceInfo {
     std::string name;
     std::wstring id;
     bool isDefault = false;
+    std::string wolfeSerial;  // set if this is one of Wolfe's own devices (see wolfeSerialOf)
 };
 
 // eRender = outputs, eCapture = inputs. Only devices that are currently usable.
 std::vector<DeviceInfo> listDevices(EDataFlow flow);
 
 std::string deviceName(IMMDevice* device);
+
+// If the endpoint is one of Wolfe's own devices (see VirtualDevices), the
+// serial number it was given; empty for any other device.
+std::string wolfeSerialOf(IMMDevice* device);
+// The endpoint of Wolfe's own device with this serial number, or null while
+// Windows does not have it.
+ComPtr<IMMDevice> findWolfeDevice(EDataFlow flow, const std::string& serial);
 
 // `spec` is "default" (or empty), an exact endpoint id, or a case-insensitive
 // fragment of the device name. Throws std::runtime_error if nothing matches.

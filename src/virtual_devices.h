@@ -3,10 +3,22 @@
 #include "frame_timeline.h"
 #include "graph_clock.h"
 
+#include <cstdint>
 #include <memory>
 #include <string>
 
 namespace wolfe {
+
+// How Wolfe's devices identify themselves over USB. Windows names a device's
+// endpoints after vendor id, product id, release and serial number, and gives
+// them new ids (losing which applications were assigned to them) if any of
+// these change: they must stay as they are once people use them.
+//
+// 1209 is pid.codes, the vendor id shared by open source hardware; 0003 and
+// 0004 are placeholders until Wolfe has product ids of its own there.
+constexpr uint16_t kWolfeVendor = 0x1209;
+constexpr uint16_t kWolfeSpeakerProduct = 0x0003;
+constexpr uint16_t kWolfeMicrophoneProduct = 0x0004;
 
 struct VirtualDeviceSpec {
     // false: a speaker that applications play into (its audio comes into the

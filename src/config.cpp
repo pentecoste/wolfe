@@ -138,9 +138,9 @@ void saveDescription(const std::string& path, const GraphDescription& descriptio
 }
 
 void addNode(const NodeDescription& node, Graph& graph) {
-    if (node.type == "input") graph.addInput(node.id, {InputKind::Device, node.target});
-    else if (node.type == "loopback") graph.addInput(node.id, {InputKind::Loopback, node.target});
-    else if (node.type == "app") graph.addInput(node.id, {InputKind::Process, node.target});
+    if (node.type == "input") graph.addInput(node.id, {InputKind::Device, node.target, {}});
+    else if (node.type == "loopback") graph.addInput(node.id, {InputKind::Loopback, node.target, {}});
+    else if (node.type == "app") graph.addInput(node.id, {InputKind::Process, node.target, {}});
     else if (node.type == "output") graph.addOutput(node.id, node.target);
     else if (isVirtualType(node.type)) {
         VirtualDeviceSpec spec;

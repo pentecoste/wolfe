@@ -220,7 +220,13 @@ void Input::open() {
         description = name + " (pid " + std::to_string(capturedPid_) + ")";
     } else {
         const bool loopback = spec_.kind == InputKind::Loopback;
-        ComPtr<IMMDevice> device = findDevice(loopback ? eRender : eCapture, spec_.target);
+        ComPtr<IMMDevice> device;
+        if (!spec_.wolfeSerial.empty()) {
+            device = findWolfeDevice(loopback ? eRender : eCapture, spec_.wolfeSerial);
+            if (!device) throw std::runtime_error("waiting for Windows to have the device");
+        } else {
+            device = findDevice(loopback ? eRender : eCapture, spec_.target);
+        }
         check(device->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr, client_.putVoid()), "activate device");
 
         // Keep the device's own channel layout and let Windows convert only the
@@ -254,6 +260,7 @@ void Input::run() {
     // Only here: looking for the device or the application is ordinary work.
     AudioThreadPriority priority;
     check(client_->Start(), "start capture");
+    capturing_ = true;
     HANDLE handles[2] = {stopEvent_, dataEvent_};
     for (;;) {
         DWORD result = WaitForMultipleObjects(2, handles, FALSE, 200);
@@ -272,6 +279,7 @@ void Input::run() {
 }
 
 void Input::close() {
+    capturing_ = false;
     if (client_) client_->Stop();
     capture_.reset();
     client_.reset();

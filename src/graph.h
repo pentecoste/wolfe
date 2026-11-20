@@ -34,7 +34,8 @@ struct Plan {
     struct Step {
         std::string nodeId;
         std::shared_ptr<SourceReader> reader;   // an input from a device on its own clock,
-        std::shared_ptr<VirtualDevice> device;  // or one of Wolfe's devices, on the graph's clock;
+        std::shared_ptr<VirtualDevice> device;  // or one of Wolfe's speakers (with `reader` on `tap`);
+        const Input* tap = nullptr;
         std::shared_ptr<Effect> effect;         // otherwise this is, with `feeds`
         std::vector<Feed> feeds;
         std::vector<float> audio;               // this step's result for the current cycle
@@ -142,6 +143,9 @@ private:
     std::map<std::string, std::string> effects_;  // id -> type
     std::map<std::string, OutputNode> outputs_;
     std::map<std::string, std::shared_ptr<VirtualDevice>> virtuals_;
+    // Wolfe's speakers as captured from their endpoints: Windows hands over
+    // what is played on them sooner this way than through the USB stream.
+    std::map<std::string, std::unique_ptr<Input>> taps_;
     std::unique_ptr<VirtualDevices> virtualDevices_;  // made when the first one is added
     std::vector<std::shared_ptr<Link>> links_;
 
