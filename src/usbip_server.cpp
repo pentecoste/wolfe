@@ -27,7 +27,10 @@ namespace {
 // --- the device, as USB describes it ------------------------------------------
 //
 // Identity: see kWolfeVendor in virtual_devices.h. The release is part of it
-// too and must stay as it is; the descriptors below may change.
+// too, and so are the terminal types below (changing the recording device's
+// from microphone to line input gave it a new endpoint id): they must stay as
+// they are. The rest of the descriptors may change (tested: the feedback
+// endpoint's interval).
 constexpr uint16_t kVendor = kWolfeVendor;
 constexpr uint16_t kPlaybackProduct = kWolfeSpeakerProduct;
 constexpr uint16_t kRecordingProduct = kWolfeMicrophoneProduct;
@@ -84,7 +87,9 @@ std::vector<uint8_t> deviceDescriptor(const UsbIpDevice& device) {
 std::vector<uint8_t> qualifierDescriptor() { return {10, 0x06, 0x00, 0x02, 0xEF, 0x02, 0x01, 64, 1, 0}; }
 
 // Audio control: a clock source and two terminals. Playback: USB streaming
-// (1) feeds a speaker (3); recording: a microphone (4) feeds USB streaming (6).
+// (1) feeds a speaker (3); recording: a line input (4) feeds USB streaming
+// (6). Not a microphone: Windows gives microphones voice processing (noise
+// suppression, gain control) that mangles anything that is not a voice.
 // Then one streaming interface, 32-bit stereo PCM at 48 kHz.
 std::vector<uint8_t> configDescriptor(const UsbIpDevice& device) {
     const bool playback = device.direction == UsbIpDevice::Direction::Playback;
@@ -98,7 +103,7 @@ std::vector<uint8_t> configDescriptor(const UsbIpDevice& device) {
         add(c, {17, 0x24, 0x02, 1, 0x01, 0x01, 0, kClockId, 2, 0x03, 0, 0, 0, 0, 0, 0, 0});  // IT 1: USB streaming
         add(c, {12, 0x24, 0x03, 3, 0x01, 0x03, 0, 1, kClockId, 0, 0, 0});                    // OT 3: speaker
     } else {
-        add(c, {17, 0x24, 0x02, 4, 0x01, 0x02, 0, kClockId, 2, 0x03, 0, 0, 0, 0, 0, 0, 0});  // IT 4: microphone
+        add(c, {17, 0x24, 0x02, 4, 0x03, 0x06, 0, kClockId, 2, 0x03, 0, 0, 0, 0, 0, 0, 0});  // IT 4: line connector
         add(c, {12, 0x24, 0x03, 6, 0x01, 0x01, 0, 4, kClockId, 0, 0, 0});                    // OT 6: USB streaming
     }
     setLength16(c, header + 6, c.size() - header);
