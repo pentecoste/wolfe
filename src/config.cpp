@@ -66,6 +66,7 @@ GraphDescription loadDescription(const std::string& path) {
             node.serial = optionalString(item, "serial");
         }
         node.label = optionalString(item, "label");
+        if (item.contains("muted") && item["muted"].is_boolean()) node.muted = item["muted"].get<bool>();
         if (const EffectType* effect = findEffectType(node.type)) {
             for (const EffectParameter& parameter : effect->parameters) {
                 if (item.contains(parameter.key) && item[parameter.key].is_number()) {
@@ -111,6 +112,7 @@ void saveDescription(const std::string& path, const GraphDescription& descriptio
         }
         for (const auto& [key, value] : node.parameters) item[key] = std::round(value * 1000.0) / 1000.0;
         if (!node.label.empty()) item["label"] = node.label;
+        if (node.muted) item["muted"] = true;
         if (node.hasPosition) {
             item["x"] = std::round(node.x);
             item["y"] = std::round(node.y);
@@ -163,6 +165,7 @@ void addNode(const NodeDescription& node, Graph& graph) {
             if (value != node.parameters.end()) graph.setEffectParameter(node.id, (int)i, (float)value->second);
         }
     }
+    if (node.muted) graph.setMuted(node.id, true);
 }
 
 void buildGraph(const GraphDescription& description, Graph& graph) {

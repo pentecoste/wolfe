@@ -45,6 +45,7 @@ struct Node {
     std::string detail;    // second line under the title
     // Effects: the value of each of the type's parameters, in their order.
     std::vector<float> parameters;
+    bool muted = false;   // passes on silence, inside Wolfe only
 
     bool resolved = false;  // devices: `target` is the device's own id, not part of its name
     bool present = false;   // the device is plugged in (Wolfe's: Windows has it)
@@ -133,6 +134,9 @@ public:
     void setParameter(int nodeUid, int index, float value);
     // Every setting of an effect back to its initial value.
     void resetParameters(int nodeUid);
+    // A muted box passes on silence: what comes out of a source or an effect,
+    // what goes into a sink. The device itself is not touched.
+    void setMuted(int nodeUid, bool muted);
     // A box for a device of the computer, by its id (see devicesToAdd()). 0 if it cannot be made.
     int addDevice(bool recording, const std::string& deviceId, float x, float y);
     // The computer's devices that are not on the canvas yet, Wolfe's own left out.

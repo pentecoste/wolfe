@@ -476,8 +476,22 @@ void Editor::drawNode(const Node& node) {
     std::string title = node.label, second = node.detail;
     if (node.isDevice()) splitDeviceName(node.label, title, second);
 
+    // The title, and at its right the mute switch: red while muted.
     ImNodes::BeginNodeTitleBar();
-    ImGui::TextUnformatted(fit(title, width).c_str());
+    const float titleX = ImGui::GetCursorPosX();
+    const float muteWidth = ImGui::CalcTextSize("M").x + ImGui::GetStyle().FramePadding.x * 2.0f;
+    ImGui::TextUnformatted(fit(title, width - muteWidth - ImGui::GetStyle().ItemSpacing.x).c_str());
+    // (SameLine with a position would count it from elsewhere inside the node's group.)
+    ImGui::SameLine();
+    ImGui::SetCursorPosX(titleX + width - muteWidth);
+    ImGui::PushID(node.uid);
+    ImGui::PushStyleColor(ImGuiCol_Button, node.muted ? ImVec4(0.80f, 0.22f, 0.22f, 1.0f) : ImVec4(0, 0, 0, 0.18f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, node.muted ? ImVec4(0.90f, 0.32f, 0.32f, 1.0f) : ImVec4(0, 0, 0, 0.35f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.95f, 0.40f, 0.40f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_Text, node.muted ? ImVec4(1, 1, 1, 1) : ImVec4(1, 1, 1, 0.55f));
+    if (ImGui::SmallButton("M##mute")) controller_.setMuted(node.uid, !node.muted);
+    ImGui::PopStyleColor(4);
+    ImGui::PopID();
     ImNodes::EndNodeTitleBar();
     if (!second.empty()) ImGui::TextUnformatted(fit(second, width).c_str());
 
@@ -612,7 +626,13 @@ void Editor::drawCanvas() {
     // (A link that was pulled off its pin is in the user's hand, not here.)
     for (const Connection& link : controller_.links()) {
         if (link.uid == heldLink_) continue;
+        // Grey when nothing goes through it: one of its ends is muted.
+        const Node* from = controller_.node(link.from);
+        const Node* to = controller_.node(link.to);
+        const bool silent = (from && from->muted) || (to && to->muted);
+        if (silent) ImNodes::PushColorStyle(ImNodesCol_Link, IM_COL32(95, 100, 112, 255));
         ImNodes::Link(link.uid, outputPin(link.from), inputPin(link.to));
+        if (silent) ImNodes::PopColorStyle();
     }
     ImNodes::MiniMap(0.15f, ImNodesMiniMapLocation_BottomRight);
     ImNodes::EndNodeEditor();
@@ -742,10 +762,13 @@ void Editor::drawMenus() {
                 changed |= node->parameters[i] != type->parameters[i].initial;
             }
             const bool connected = controller_.linked(uid);
+            const bool muted = node->muted;
             ImGui::TextDisabled("%s", node->label.c_str());
             ImGui::Separator();
             // Each of these may change the list of nodes: `node` is not used after them.
-            if (type && !type->parameters.empty() && ImGui::MenuItem("Reset values", nullptr, false, changed)) {
+            if (ImGui::MenuItem("Mute", nullptr, muted)) {
+                controller_.setMuted(uid, !muted);
+            } else if (type && !type->parameters.empty() && ImGui::MenuItem("Reset values", nullptr, false, changed)) {
                 controller_.resetParameters(uid);
             } else if (ImGui::MenuItem("Disconnect everything", nullptr, false, connected)) {
                 controller_.disconnectAll(uid);

@@ -96,6 +96,11 @@ inputs, so that it does not apply its voice processing to them.
   and pressing Delete.
 - An effect's settings are dragged left or right (Shift: faster, Alt: finer);
   a double click lets you type one. Its menu puts them back as they started.
+- **M**, at the right of a box's title, mutes it inside Wolfe: what comes out
+  of a microphone, a Wolfe speaker or an effect becomes silence, and a
+  speaker or a Wolfe microphone is given silence. The device itself, and its
+  mute in Windows, are not touched. A muted box's M is red and its links are
+  grey; muting is kept in the file (`"muted": true`).
 - Right-click a box or a link for its menu. Delete removes what is selected.
 - Middle button, or Alt + drag, moves the view.
 

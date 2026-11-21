@@ -6,6 +6,7 @@
 #include "output.h"
 #include "virtual_devices.h"
 
+#include <algorithm>
 #include <atomic>
 #include <map>
 #include <memory>
@@ -20,6 +21,29 @@ namespace wolfe {
 struct Link {
     std::string from, to;
     std::atomic<float> gain{1.0f};
+};
+
+// A node's mute switch. It may be thrown from any thread while audio runs;
+// the cycle fades the node's audio out or in over one cycle, so that it does
+// not click.
+struct Mute {
+    std::atomic<bool> on{false};
+    float applied = 1.0f;  // the gain at the end of the last cycle (used by the cycle only)
+
+    // One cycle of a node's audio, as the switch has it.
+    void apply(float* stereo) {
+        const float target = on.load(std::memory_order_relaxed) ? 0.0f : 1.0f;
+        if (target == applied) {
+            if (target == 0.0f) std::fill(stereo, stereo + kQuantum * 2, 0.0f);
+            return;
+        }
+        for (int i = 0; i < kQuantum; i++) {
+            const float gain = applied + (target - applied) * (i + 1) / kQuantum;
+            stereo[i * 2] *= gain;
+            stereo[i * 2 + 1] *= gain;
+        }
+        applied = target;
+    }
 };
 
 // What the graph computes every cycle, flattened into steps ordered so that
@@ -39,6 +63,7 @@ struct Plan {
         std::shared_ptr<Effect> effect;         // otherwise this is, with `feeds`
         std::vector<Feed> feeds;
         std::vector<float> audio;               // this step's result for the current cycle
+        std::shared_ptr<Mute> mute;             // silences what comes out of it
     };
     struct Sink {
         std::string nodeId;
@@ -46,6 +71,7 @@ struct Plan {
         std::shared_ptr<VirtualDevice> device;  // or for one of Wolfe's devices to take
         std::vector<Feed> feeds;
         std::vector<int> inputs;                // the reader steps that reach it, for reports
+        std::shared_ptr<Mute> mute;             // silences what goes into it
     };
     std::vector<Step> steps;
     std::vector<Sink> sinks;
@@ -86,6 +112,9 @@ public:
     void setLinkGain(const std::string& from, const std::string& to, float gain);
     // A setting of an effect, by its index in the type's parameters (see EffectType).
     void setEffectParameter(const std::string& id, int index, float value);
+    // A muted node passes on silence: a source or an effect gives silence to
+    // what it is linked to, a sink is given silence. Devices are not touched.
+    void setMuted(const std::string& id, bool muted);
 
     // Extra age given to the audio on top of the minimum, to absorb timing
     // irregularities. More is safer, less is faster. Applies to nodes added later.
@@ -147,6 +176,7 @@ private:
     std::map<std::string, std::unique_ptr<Input>> inputs_;
     // Each effect node's one instance, kept from plan to plan.
     std::map<std::string, std::shared_ptr<Effect>> effects_;
+    std::map<std::string, std::shared_ptr<Mute>> mutes_;  // every node's, kept from plan to plan
     std::map<std::string, OutputNode> outputs_;
     std::map<std::string, std::shared_ptr<VirtualDevice>> virtuals_;
     // Wolfe's speakers as captured from their endpoints: Windows hands over

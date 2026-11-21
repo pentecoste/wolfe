@@ -4,6 +4,7 @@
 //
 // Time is simulated, so a minute of audio takes a moment to run.
 #include "effect.h"
+#include "graph.h"
 #include "rnnoise.h"
 #include "source_buffer.h"
 #include "source_reader.h"
@@ -355,6 +356,31 @@ void testRnnoiseNode() {
     expect(std::fabs(voiceOut - voiceIn) < 1.5, "a voice comes through");
 }
 
+// A node's mute fades its audio out over one cycle, then keeps it silent,
+// and fades it back in.
+void testMute() {
+    printf("mute\n");
+    Mute mute;
+    float stereo[kQuantum * kChannels];
+    auto fill = [&] { std::fill(stereo, stereo + kQuantum * kChannels, 0.5f); };
+    fill();
+    mute.apply(stereo);
+    expect(stereo[0] == 0.5f && stereo[kQuantum * 2 - 1] == 0.5f, "off, it changes nothing");
+    mute.on = true;
+    fill();
+    mute.apply(stereo);
+    float largestStep = 0.0f;
+    for (int i = 1; i < kQuantum; i++) largestStep = std::max(largestStep, std::fabs(stereo[i * 2] - stereo[(i - 1) * 2]));
+    expect(stereo[0] > 0.49f && stereo[kQuantum * 2 - 2] == 0.0f && largestStep < 0.002f, "on, it fades out over one cycle");
+    fill();
+    mute.apply(stereo);
+    expect(std::all_of(stereo, stereo + kQuantum * 2, [](float x) { return x == 0.0f; }), "then it is silent");
+    mute.on = false;
+    fill();
+    mute.apply(stereo);
+    expect(stereo[0] < 0.01f && stereo[kQuantum * 2 - 1] == 0.5f, "off again, it fades back in");
+}
+
 // The "gain" node multiplies by its gain; a new gain is reached over one
 // cycle, without a jump that would click.
 void testGainNode() {
@@ -529,6 +555,7 @@ int main() {
     testLateBlocks();
     testRnnoiseNode();
     testGainNode();
+    testMute();
     testEffectsStayBounded();
     testEffectsDoTheirJob();
     printf(g_failures ? "\n%d check(s) FAILED\n" : "\nall checks passed\n", g_failures);

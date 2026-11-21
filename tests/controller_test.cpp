@@ -170,6 +170,34 @@ void testGains() {
     expect(reloaded.links().size() == 3 && reloaded.nodes().size() == 4, "everything else is back too");
 }
 
+void testMuting() {
+    printf("muting\n");
+    const std::string document = tempFile("wolfe-test-mute.json");
+    int gainUid = 0;
+    {
+        Controller controller(document, false);
+        controller.apply(system());
+        const int mic = controller.addDevice(true, "{fake-mic}", 100, 100);
+        const int gain = controller.addEffect("gain", 400, 100);
+        gainUid = gain;
+        expect(!controller.node(mic)->muted && !controller.node(gain)->muted, "boxes start unmuted");
+        controller.setMuted(mic, true);
+        expect(controller.node(mic)->muted && !controller.node(mic)->active, "a box can be muted before it is in use");
+        expect(controller.connect(mic, gain).empty() && controller.node(mic)->active && controller.node(mic)->muted, "and stays muted once it is");
+        controller.setMuted(gain, true);
+        controller.setMuted(gain, false);
+        expect(!controller.node(gain)->muted, "unmuted again");
+        controller.save();
+    }
+    expect(readFile(document).find("\"muted\": true") != std::string::npos, "muting is written in the file");
+    Controller reloaded(document, false);
+    reloaded.load();
+    int muted = 0;
+    for (const Node& node : reloaded.nodes()) muted += node.muted ? 1 : 0;
+    expect(muted == 1 && firstOf(reloaded, NodeKind::Input)->muted, "and is back after loading, only where it was");
+    (void)gainUid;
+}
+
 void testEffects() {
     printf("effects\n");
     const std::string document = tempFile("wolfe-test-effects.json");
@@ -423,6 +451,7 @@ int main() {
     testDevices();
     testGains();
     testEffects();
+    testMuting();
     testHandWrittenFile();
     testWolfeDevices();
     testApplications();

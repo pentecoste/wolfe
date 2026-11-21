@@ -161,6 +161,7 @@ void Controller::save() {
             }
         }
         if (node.isDevice()) out.label = node.label;
+        out.muted = node.muted;
         out.hasPosition = node.hasPosition;
         out.x = node.x;
         out.y = node.y;
@@ -200,6 +201,7 @@ std::string Controller::adopt(const GraphDescription& description) {
         node.id = in.id;
         node.type = in.type;
         node.target = in.target;
+        node.muted = in.muted;
         node.hasPosition = in.hasPosition;
         node.x = in.x;
         node.y = in.y;
@@ -312,6 +314,7 @@ void Controller::ensureEngine(Node& node) {
             description.parameters[type->parameters[i].key] = node.parameters[i];
         }
     }
+    description.muted = node.muted;
     addNode(description, graph_);
     node.active = true;
 }
@@ -423,6 +426,14 @@ void Controller::setParameter(int nodeUid, int index, float value) {
     if (node->parameters[index] == value) return;
     node->parameters[index] = value;
     if (node->active) graph_.setEffectParameter(node->id, index, value);
+    markDirty();
+}
+
+void Controller::setMuted(int nodeUid, bool muted) {
+    Node* node = find(nodeUid);
+    if (!node || node->muted == muted) return;
+    node->muted = muted;
+    if (node->active) graph_.setMuted(node->id, muted);
     markDirty();
 }
 

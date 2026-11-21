@@ -76,6 +76,7 @@ void Graph::requireNewId(const std::string& id) const {
 
 void Graph::addInput(const std::string& id, InputSpec spec) {
     requireNewId(id);
+    mutes_[id] = std::make_shared<Mute>();
     auto input = std::make_unique<Input>(std::move(spec));
     if (running_) input->start();
     inputs_[id] = std::move(input);
@@ -83,6 +84,7 @@ void Graph::addInput(const std::string& id, InputSpec spec) {
 
 void Graph::addEffect(const std::string& id, const std::string& type) {
     requireNewId(id);
+    mutes_[id] = std::make_shared<Mute>();
     std::shared_ptr<Effect> effect = createEffect(type);
     if (!effect) throw std::runtime_error("unknown effect type \"" + type + "\"");
     effects_[id] = std::move(effect);
@@ -90,6 +92,7 @@ void Graph::addEffect(const std::string& id, const std::string& type) {
 
 void Graph::addOutput(const std::string& id, const std::string& device) {
     requireNewId(id);
+    mutes_[id] = std::make_shared<Mute>();
     OutputNode node;
     // The graph delivers exactly one quantum per cycle.
     node.feed = std::make_shared<SourceBuffer>();
@@ -105,6 +108,7 @@ void Graph::addOutput(const std::string& id, const std::string& device) {
 
 void Graph::addVirtualDevice(const std::string& id, const VirtualDeviceSpec& spec) {
     requireNewId(id);
+    mutes_[id] = std::make_shared<Mute>();
     if (spec.name.empty() || spec.serial.empty()) throw std::runtime_error("\"" + id + "\" needs a name and a serial");
     if (!virtualDevices_) virtualDevices_ = std::make_unique<VirtualDevices>(clock_, 3241, offerVirtual_);
     if (!spec.recording) {
@@ -143,6 +147,7 @@ void Graph::removeNode(const std::string& id) {
         }
     }
     effects_.erase(id);
+    mutes_.erase(id);
     std::shared_ptr<VirtualDevice> device;
     std::unique_ptr<Input> tap;
     if (auto found = virtuals_.find(id); found != virtuals_.end()) {
@@ -246,6 +251,10 @@ void Graph::setEffectParameter(const std::string& id, int index, float value) {
     if (auto found = effects_.find(id); found != effects_.end()) found->second->setParameter(index, value);
 }
 
+void Graph::setMuted(const std::string& id, bool muted) {
+    if (auto found = mutes_.find(id); found != mutes_.end()) found->second->on.store(muted, std::memory_order_relaxed);
+}
+
 // Collects everything that can reach an output and orders it so that each
 // node comes after the nodes feeding it. Readers, effects and gains of the
 // previous plan are carried over, so that changing one link does not disturb
@@ -279,6 +288,7 @@ std::shared_ptr<Plan> Graph::buildPlan(const Plan* previous) const {
 
         Plan::Step step;
         step.nodeId = id;
+        if (auto mute = mutes_.find(id); mute != mutes_.end()) step.mute = mute->second;
         step.audio.assign(kQuantumSamples, 0.0f);
         const Plan::Step* old = oldStep(id);
 
@@ -318,6 +328,7 @@ std::shared_ptr<Plan> Graph::buildPlan(const Plan* previous) const {
         }
         Plan::Sink sink;
         sink.nodeId = id;
+        if (auto mute = mutes_.find(id); mute != mutes_.end()) sink.mute = mute->second;
         sink.feed = std::move(feed);
         sink.device = std::move(device);
         for (const auto& link : links_) {
@@ -493,15 +504,18 @@ void Graph::runCycle(Plan& plan, int64_t cycle, const std::string& leaderId, flo
             mixFeeds(plan, step.feeds, audio);
             step.effect->process(audio);
         }
+        if (step.mute) step.mute->apply(audio);
     }
     float out[kQuantumSamples];
     for (Plan::Sink& sink : plan.sinks) {
         if (leaderOut && sink.nodeId == leaderId) {
             mixFeeds(plan, sink.feeds, leaderOut);  // played as it is
+            if (sink.mute) sink.mute->apply(leaderOut);
             continue;
         }
         std::memset(out, 0, sizeof(out));
         mixFeeds(plan, sink.feeds, out);
+        if (sink.mute) sink.mute->apply(out);
         if (sink.device) sink.device->timeline()->write(firstFrame, out, kQuantum);
         else sink.feed->push(endTime, out, kQuantum);
     }
