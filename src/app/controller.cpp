@@ -1,6 +1,7 @@
 #include "controller.h"
 
 #include "app_devices.h"
+#include "default_devices.h"
 #include "process_finder.h"
 #include "virtual_devices.h"
 
@@ -146,7 +147,7 @@ std::string Controller::load() {
     return problems;
 }
 
-void Controller::save() {
+GraphDescription Controller::describe() const {
     GraphDescription description;
     description.marginMs = marginMs_;
     description.closeToTray = closeToTray_;
@@ -164,21 +165,118 @@ void Controller::save() {
         }
         if (node.isDevice()) out.label = node.label;
         out.muted = node.muted;
+        out.selected = node.selected;
         out.hasPosition = node.hasPosition;
         out.x = node.x;
         out.y = node.y;
         description.nodes.push_back(out);
     }
-    for (const Connection& link : links_) description.links.push_back({node(link.from)->id, node(link.to)->id, 0.0});
+    for (const Connection& link : links_) {
+        description.links.push_back({node(link.from)->id, node(link.to)->id, 0.0, link.muted});
+    }
+    return description;
+}
 
+void Controller::save() {
     dirty_ = false;
     try {
         std::filesystem::path path(toWide(documentPath_));
         if (path.has_parent_path()) std::filesystem::create_directories(path.parent_path());
-        saveDescription(documentPath_, description);
+        saveDescription(documentPath_, describe());
     } catch (const std::exception& error) {
         logLine("could not save the graph: %s", error.what());
     }
+}
+
+std::string Controller::exportTo(const std::string& path) {
+    try {
+        saveDescription(path, describe());
+    } catch (const std::exception& error) {
+        return error.what();
+    }
+    return {};
+}
+
+std::string Controller::importFrom(const std::string& path, bool* imported) {
+    if (imported) *imported = false;
+    GraphDescription description;
+    try {
+        description = loadDescription(path);
+    } catch (const std::exception& error) {
+        return error.what();
+    }
+    // This computer's preferences are not the file's business.
+    description.marginMs = marginMs_;
+    description.closeToTray = closeToTray_;
+    description.showApps = showApps_;
+    // A device of another computer is looked for here by its name.
+    for (NodeDescription& in : description.nodes) {
+        if (!(in.type == "input" || in.type == "output") || !startsWith(in.target, "{")) continue;
+        bool here = false;
+        for (const DeviceInfo& device : in.type == "input" ? devices_.inputs : devices_.outputs) {
+            here |= toUtf8(device.id) == in.target;
+        }
+        if (!here && !in.label.empty()) in.target = in.label;
+    }
+    std::set<std::string> known;
+    for (const Node& node : nodes_) {
+        if (node.isWolfeDevice()) known.insert(toLower(node.serial));
+    }
+
+    std::string problems = adopt(description);
+    for (const Node& node : nodes_) {
+        if (node.isWolfeDevice() && !known.count(toLower(node.serial))) expectNewDevice(node.serial);
+    }
+    apply(devices_);  // finds the devices named by their names
+    markDirty();
+    if (imported) *imported = true;
+    return problems;
+}
+
+std::string Controller::buildExample() {
+    std::string problems;
+    auto pick = [](const std::vector<DeviceInfo>& devices) -> const DeviceInfo* {
+        const DeviceInfo* chosen = nullptr;
+        for (const DeviceInfo& device : devices) {
+            if (!device.wolfeSerial.empty()) continue;
+            if (!chosen || device.isDefault) chosen = &device;
+            if (device.isDefault) break;
+        }
+        return chosen;
+    };
+    const DeviceInfo* headphones = pick(devices_.outputs);
+    const DeviceInfo* microphone = pick(devices_.inputs);
+    auto wolfeName = [this](bool recording, const char* wanted) {
+        for (const Node& node : nodes_) {
+            if (node.isWolfeDevice() && toLower(node.label) == toLower(wanted)) return freeWolfeName(recording);
+        }
+        return std::string(wanted);
+    };
+
+    std::string problem;
+    const int music = addWolfeDevice(false, wolfeName(false, "Wolfe Music"), 80, 60, &problem);
+    if (!music) problems += problem + "\n";
+    const int chat = addWolfeDevice(true, wolfeName(true, "Wolfe Chat"), 680, 230, &problem);
+    if (!chat) problems += problem + "\n";
+    const int quieter = addEffect("gain", 380, 150);
+    setParameter(quieter, 0, -12.0f);
+    const int denoise = addEffect("rnnoise", 380, 300);
+    const int phones = headphones ? addDevice(false, toUtf8(headphones->id), 680, 60) : 0;
+    const int mic = microphone ? addDevice(true, toUtf8(microphone->id), 80, 300) : 0;
+    if (!headphones) problems += "There are no headphones or speakers to send the music to.\n";
+    if (!microphone) problems += "There is no microphone to clean up.\n";
+
+    auto join = [&](int from, int to) {
+        if (!from || !to) return;
+        const std::string error = link(from, to);
+        if (!error.empty()) problems += error + "\n";
+    };
+    join(music, phones);
+    join(music, quieter);
+    join(quieter, chat);
+    join(mic, denoise);
+    join(denoise, chat);
+    return problems;
 }
 
 void Controller::clear() {
@@ -204,6 +302,7 @@ std::string Controller::adopt(const GraphDescription& description) {
         node.type = in.type;
         node.target = in.target;
         node.muted = in.muted;
+        node.selected = in.selected;
         node.hasPosition = in.hasPosition;
         node.x = in.x;
         node.y = in.y;
@@ -218,8 +317,6 @@ std::string Controller::adopt(const GraphDescription& description) {
             node.serial = in.serial.empty() ? serialFor(node.id) : in.serial;
             node.detail = node.kind == NodeKind::WolfeSpeaker ? "Wolfe speaker" : "Wolfe microphone";
         } else if (const EffectType* type = findEffectType(in.type)) {
-            // A junction of the earlier versions is a gain that changes nothing.
-            if (!type->offered) type = findEffectType("gain");
             node.kind = NodeKind::Effect;
             node.type = type->type;
             node.label = type->name;
@@ -257,7 +354,7 @@ std::string Controller::adopt(const GraphDescription& description) {
             problems += "the link \"" + in.from + "\" -> \"" + in.to + "\" had a gain, which links no longer have: " +
                         "it carries the audio as it is.\n";
         }
-        const std::string error = link(from->uid, to->uid);
+        const std::string error = link(from->uid, to->uid, in.muted);
         if (!error.empty()) problems += error + "\n";
     }
 
@@ -332,7 +429,22 @@ void Controller::syncEngine(int nodeUid) {
     node->status.clear();
 }
 
-std::string Controller::link(int fromUid, int toUid) {
+// Silence for a muted link, and for one into a selector that is not the one
+// it lets through.
+float Controller::gainOf(const Connection& link) const {
+    if (link.muted) return 0.0f;
+    const Node* to = node(link.to);
+    if (to && to->isSelector() && selectedInput(link.to) != link.from) return 0.0f;
+    return 1.0f;
+}
+
+void Controller::applyGains(int toUid) {
+    for (const Connection& link : links_) {
+        if (link.to == toUid) graph_.setLinkGain(node(link.from)->id, node(link.to)->id, gainOf(link));
+    }
+}
+
+std::string Controller::link(int fromUid, int toUid, bool muted) {
     Node* from = find(fromUid);
     Node* to = find(toUid);
     if (!from || !to) return "That box is not there any more.";
@@ -346,21 +458,24 @@ std::string Controller::link(int fromUid, int toUid) {
         return "That would make a loop: what comes out of \"" + to->label + "\" would come back into it.";
     }
 
-    try {
-        ensureEngine(*from);
-        ensureEngine(*to);
-        graph_.addLink(from->id, to->id, 1.0f);
-    } catch (const std::exception& error) {
-        syncEngine(fromUid);
-        syncEngine(toUid);
-        return error.what();
-    }
-
+    // In the list first, so that its gain can be worked out; taken back out
+    // if the engine refuses it.
     Connection link;
     link.uid = nextUid_++;
     link.from = fromUid;
     link.to = toUid;
+    link.muted = muted;
     links_.push_back(link);
+    try {
+        ensureEngine(*from);
+        ensureEngine(*to);
+        graph_.addLink(from->id, to->id, gainOf(link));
+    } catch (const std::exception& error) {
+        links_.pop_back();
+        syncEngine(fromUid);
+        syncEngine(toUid);
+        return error.what();
+    }
     markDirty();
     return {};
 }
@@ -371,9 +486,88 @@ void Controller::unlink(int linkUid) {
     const Connection link = *found;
     graph_.removeLink(node(link.from)->id, node(link.to)->id);
     links_.erase(found);
+    // A selector whose choice goes away lets the first of the others through,
+    // and keeps to it.
+    Node* to = find(link.to);
+    if (to && to->isSelector() && to->selected == node(link.from)->id) to->selected.clear();
+    applyGains(link.to);
     syncEngine(link.from);
     syncEngine(link.to);
     markDirty();
+}
+
+void Controller::setLinkMuted(int linkUid, bool muted) {
+    for (Connection& link : links_) {
+        if (link.uid != linkUid || link.muted == muted) continue;
+        link.muted = muted;
+        graph_.setLinkGain(node(link.from)->id, node(link.to)->id, gainOf(link));
+        markDirty();
+    }
+}
+
+std::vector<int> Controller::inputsOf(int nodeUid) const {
+    std::vector<int> inputs;
+    for (const Connection& link : links_) {
+        if (link.to == nodeUid) inputs.push_back(link.from);
+    }
+    return inputs;
+}
+
+int Controller::selectedInput(int selectorUid) const {
+    const Node* selector = node(selectorUid);
+    if (!selector) return 0;
+    std::vector<std::string> ids;
+    const std::vector<int> inputs = inputsOf(selectorUid);
+    for (int uid : inputs) ids.push_back(node(uid)->id);
+    const std::string chosen = wolfe::selectedInput(selector->selected, ids);
+    for (int uid : inputs) {
+        if (node(uid)->id == chosen) return uid;
+    }
+    return 0;
+}
+
+void Controller::select(int selectorUid, int fromUid) {
+    Node* selector = find(selectorUid);
+    const Node* from = node(fromUid);
+    if (!selector || !selector->isSelector() || !from || selector->selected == from->id) return;
+    const std::vector<int> inputs = inputsOf(selectorUid);
+    if (std::find(inputs.begin(), inputs.end(), fromUid) == inputs.end()) return;
+    selector->selected = from->id;
+    applyGains(selectorUid);
+    markDirty();
+}
+
+std::set<int> Controller::silentLinks() const {
+    // Whether a node gives nothing but silence: muted, unplugged, or with no
+    // sound coming into it (for those that pass sound on).
+    std::map<int, bool> silentNode;
+    std::function<bool(int)> givesSilence;
+    std::function<bool(const Connection&)> carries = [&](const Connection& link) {
+        if (link.muted || givesSilence(link.from)) return false;
+        const Node* to = node(link.to);
+        return !(to && to->isSelector() && selectedInput(link.to) != link.from);
+    };
+    givesSilence = [&](int uid) {
+        auto known = silentNode.find(uid);
+        if (known != silentNode.end()) return known->second;
+        silentNode[uid] = true;  // (there are no loops; this only guards against one)
+        const Node* here = node(uid);
+        bool silent = !here || here->muted || (here->kind == NodeKind::Input && !here->present);
+        if (!silent && here->takesLinks()) {
+            silent = true;
+            for (const Connection& link : links_) {
+                if (link.to == uid && carries(link)) silent = false;
+            }
+        }
+        silentNode[uid] = silent;
+        return silent;
+    };
+    std::set<int> result;
+    for (const Connection& link : links_) {
+        const Node* to = node(link.to);
+        if (!carries(link) || (to && to->muted)) result.insert(link.uid);
+    }
+    return result;
 }
 
 std::string Controller::connect(int fromUid, int toUid) { return link(fromUid, toUid); }
@@ -532,8 +726,14 @@ int Controller::addWolfeDevice(bool recording, const std::string& name, float x,
         nodes_.pop_back();
         return fail(error.what());
     }
+    expectNewDevice(node.serial);
     markDirty();
     return uid;
+}
+
+void Controller::expectNewDevice(const std::string& serial) {
+    std::lock_guard<std::mutex> lock(watchMutex_);
+    newDevices_.push_back(serial);
 }
 
 void Controller::removeNode(int nodeUid) {
@@ -561,7 +761,8 @@ void Controller::moveNode(int nodeUid, float x, float y) {
 // sources on the left, effects in the middle, sinks on the right, each under
 // the lowest box of its column.
 void Controller::place(Node& node) {
-    const float x = node.givesLinks() && !node.takesLinks() ? 80.0f : node.takesLinks() && !node.givesLinks() ? 680.0f : 380.0f;
+    const bool source = node.kind == NodeKind::Input || node.kind == NodeKind::WolfeSpeaker;
+    const float x = source ? 80.0f : node.kind == NodeKind::Effect ? 380.0f : 680.0f;
     float y = 60.0f;
     for (const Node& other : nodes_) {
         if (&other == &node || !other.hasPosition) continue;
@@ -676,12 +877,15 @@ void Controller::update(double now) {
             auto found = devicePeaks.find(node.isWolfeDevice() ? node.endpoint : node.target);
             if (found != devicePeaks.end()) peak = found->second;
         }
+        float inputPeak = 0.0f;
         if (node.active) {
             node.status = graph_.nodeStatus(node.id);
             node.healthy = engineIsFine(node.status);
             peak = std::max(peak, graph_.takeNodePeak(node.id));  // what the engine itself sees
+            inputPeak = graph_.takeNodeInputPeak(node.id);
         }
         node.level = std::max(std::min(peak, 1.0f), node.level * fall);
+        node.inputLevel = std::max(std::min(inputPeak, 1.0f), node.inputLevel * fall);
     }
 
     if (dirty_ && now - dirtySince_ > 1.0) save();
@@ -697,6 +901,7 @@ void Controller::watchMain() {
 
     // Bringing applications back to Wolfe's devices (see AppDevices).
     AppDevices appDevices;
+    DefaultKeeper defaults;  // keeps a new device of Wolfe's from becoming Windows' default
     std::set<std::wstring> wolfePresent;                      // Wolfe's devices Windows had at the last look
     std::set<std::tuple<DWORD, bool, std::wstring>> movedBack;  // tried once each until a device goes again
     double arrived = -1e9;  // when one of Wolfe's devices last appeared
@@ -730,6 +935,18 @@ void Controller::watchMain() {
                     if (!wolfePresent.count(id)) arrived = nowSeconds();
                 }
                 wolfePresent = wolfeNow;
+
+                lock.lock();
+                for (const std::string& serial : newDevices_) defaults.expect(serial);
+                newDevices_.clear();
+                lock.unlock();
+                for (const auto* list : {&discovery.inputs, &discovery.outputs}) {
+                    std::map<std::wstring, std::string> present;
+                    for (const DeviceInfo& device : *list) present[device.id] = device.wolfeSerial;
+                    for (const std::string& done : defaults.look(list == &discovery.inputs ? eCapture : eRender, present, nowSeconds())) {
+                        logLine("%s", done.c_str());
+                    }
+                }
 
                 // Who uses which device: shown while somebody can see it, and
                 // looked at whenever Wolfe's devices are there. Wolfe's own
@@ -827,7 +1044,39 @@ std::string Controller::describeNode(int nodeUid) {
 
 std::string Controller::describeLink(int linkUid) const {
     for (const Connection& link : links_) {
-        if (link.uid == linkUid) return node(link.from)->label + "  ->  " + node(link.to)->label;
+        if (link.uid != linkUid) continue;
+        std::string text = node(link.from)->label + "  ->  " + node(link.to)->label;
+        if (link.muted) text += "\nmuted (right-click to unmute)";
+        else if (node(link.to)->isSelector() && selectedInput(link.to) != link.from) text += "\nnot the one the selector lets through";
+        return text;
+    }
+    return {};
+}
+
+std::string Controller::helpFor(const Node& node) {
+    switch (node.kind) {
+        case NodeKind::Effect: {
+            const EffectType* type = findEffectType(node.type);
+            return type ? type->help : "";
+        }
+        case NodeKind::Input:
+            return "A microphone or other recording device of this computer.\n"
+                   "Link it to effects, to your headphones, or into a Wolfe\n"
+                   "microphone. It is only opened while something is linked to it.";
+        case NodeKind::Output:
+            return "Headphones, speakers or another playback device of this\n"
+                   "computer. Whatever is linked into it is played on it, mixed\n"
+                   "with what applications play there themselves.";
+        case NodeKind::WolfeSpeaker:
+            return "A playback device of Wolfe's own: Windows lists it with the\n"
+                   "others. Give it to an application (Settings > System > Sound >\n"
+                   "Volume mixer) and what the application plays comes out here.";
+        case NodeKind::WolfeMic:
+            return "A recording device of Wolfe's own: Windows lists it with the\n"
+                   "others. Choose it as the microphone in an application, and the\n"
+                   "application hears whatever is linked into it.\n"
+                   "Its \"out\" pin carries the same sound onward: link it to your\n"
+                   "headphones to hear what the application hears.";
     }
     return {};
 }

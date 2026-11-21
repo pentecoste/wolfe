@@ -49,8 +49,13 @@ like.
 - 🎛️ **A real patchbay.** Link microphones, speakers and Wolfe's devices as
   you like: one source to many places, many sources into one, effects in
   between. Links that would loop are refused.
-- ✨ **15 effects.** Noise suppression with RNNoise (as in Mumble), compressor,
-  limiter, noise gate, filters, equalizer, delay, reverb, chorus and more.
+- ✨ **15 effects.** Noise suppression with RNNoise (as in Mumble), with a
+  voice gate that keeps typing out; compressor, limiter, noise gate, filters,
+  equalizer, delay, reverb, chorus and more. Every box explains itself.
+- 🔀 **Routing.** Mute a single link, switch between sources with a
+  Selector, split or join with a Junction.
+- 📦 **Take it with you.** Export the graph to a file and import it on
+  another computer: its devices are found there by name.
 - ⚡ **Low latency.** 10 ms cycles; an application on a Wolfe speaker reaches
   your headphones in 35-40 ms. Every device's clock is followed, so devices
   do not drift apart over time.
@@ -119,28 +124,37 @@ flowchart LR
 
 That's it: Wolfe remembers the graph and builds it again every time it starts.
 
+> [!TIP]
+> The first time Wolfe opens, its welcome window offers to **build this
+> example** for you, with your default microphone and headphones. It is in
+> Help > Getting started too.
+
 ## Effects
 
 | effect      | what it does                                                        | settings (in the file)                                   |
 |-------------|---------------------------------------------------------------------|----------------------------------------------------------|
-| Gain        | louder or quieter, -100 to +40 dB                                   | `gain_db`                                                |
+| Junction    | passes the sound on as it is: a point to split or join links, or to mute one branch | none                                     |
+| Selector    | lets through one of the sources linked into it, the one clicked in the box; the others are silent | `selected` (the id of that source's node) |
+| Gain        | louder or quieter, -60 dB (silent) to +24 dB                        | `gain_db`                                                |
 | Pan         | toward the left (-100) or the right (+100): the other side gets quieter | `pan`                                                 |
 | Compressor  | above the threshold the level rises only 1/ratio as much: evens out a voice | `threshold_db`, `ratio`, `attack_ms`, `release_ms`, `makeup_db` |
 | Limiter     | never louder than the ceiling: protects ears and recordings         | `ceiling_db`, `release_ms`                               |
 | Noise gate  | silent while the sound stays under the threshold: hides a microphone's hiss between words | `threshold_db`, `release_ms`        |
-| Noise suppression | RNNoise, as in Mumble: a small neural network tells voice from noise (fans, keyboard, traffic) and keeps the voice, also while you speak. The original can be mixed back in | `amount` (percent) |
+| Noise suppression | RNNoise, as in Mumble: a small neural network tells voice from steady noise (fans, hum, traffic) and keeps the voice, also while you speak. The original can be mixed back in. The voice gate mutes what RNNoise is not sure enough is a voice, which keeps out keyboard clicks and other short noises between words (0 turns it off) | `amount`, `voice_gate` (percent) |
 | High-pass   | lets through what is above the cutoff, 12 dB per octave: takes away rumble and hum | `cutoff_hz`, `q` (resonance)              |
 | Low-pass    | lets through what is below the cutoff, 12 dB per octave: takes away hiss and harshness | `cutoff_hz`, `q`                      |
 | Equalizer   | lows (below 150 Hz), mids (around 1 kHz) and highs (above 5 kHz) up or down | `low_db`, `mid_db`, `high_db`                    |
-| Delay       | echoes, each one quieter by the feedback                            | `time_ms`, `feedback`, `mix` (percent)                   |
+| Delay       | echoes: one every `time_ms`, each one `feedback` percent as loud as the one before | `time_ms`, `feedback`, `mix` (percent)    |
 | Reverb      | a room around the sound (Freeverb)                                  | `size`, `damping`, `mix` (percent)                       |
 | Chorus      | copies slightly out of time that swing: a thicker, shimmering sound | `rate_hz`, `depth_ms`, `mix`                             |
 | Tremolo     | the volume going down and up again, over and over                   | `rate_hz`, `depth`                                       |
 | Distortion  | rounds off the peaks: warm at low drive, fuzzy at high drive        | `drive_db`, `mix`                                        |
 | Bitcrusher  | fewer levels and fewer samples a second: lo-fi, old game consoles   | `bits`, `rate_hz`                                        |
 
-`mix` is how much of the processed sound replaces the original: at 0 the
-effect changes nothing. Apart from the echoes that Delay, Reverb and Chorus
+`mix` ("wet" in the box) is how much of the processed sound replaces the
+original: at 0 the effect changes nothing, at 100 only the processed sound is
+left. Levels are in dB below full scale: 0 dB is the loudest digital audio can
+be. Apart from the echoes that Delay, Reverb and Chorus
 are for, effects add no delay to the audio, except Noise suppression: RNNoise
 hands back each 10 ms one block late, so it adds 10 ms.
 
@@ -149,8 +163,10 @@ hands back each 10 ms one block late, so it adds 10 ms.
 The canvas shows only what you put on it. **Ctrl+A** opens a search for
 something to add: type part of its name, and Enter adds the one highlighted
 (Up and Down choose another). The Add menu, and a right click on the canvas,
-offer the search, the effects and Wolfe's own devices; the computer's
-microphones and speakers are added from the search.
+offer the search, the effects, Wolfe's own devices, and the computer's
+microphones and speakers that are not on the canvas yet. Every box has a
+**?** in its title: hover it to read what the box is for and what its
+settings do.
 
 | box              | what it is                                                                          | pin   |
 |------------------|-------------------------------------------------------------------------------------|-------|
@@ -158,7 +174,7 @@ microphones and speakers are added from the search.
 | Wolfe speaker    | a playback device of Wolfe's own: what applications play on it comes into Wolfe     | out   |
 | an effect        | changes what is linked into it and passes it on (see [Effects](#effects))           | both  |
 | Speaker          | a playback device of the computer (headphones, speakers)                           | in    |
-| Wolfe microphone | a recording device of Wolfe's own: applications that record from it hear what is linked into it | in |
+| Wolfe microphone | a recording device of Wolfe's own: applications that record from it hear what is linked into it; its out pin passes the same sound on (link it to your headphones to hear what they hear) | both |
 
 Wolfe takes audio from microphones and from its own speakers, and sends it to
 speakers and to its own microphones. It does not show applications and does
@@ -175,6 +191,9 @@ inputs, so that it does not apply its voice processing to them.
 | remove a link               | pull it away and let go over nothing, **Ctrl+click** it, or click it and press **Delete** |
 | change a setting            | drag its value left or right (**Shift**: faster, **Alt**: finer); double-click to type one |
 | mute a box                  | click the loudspeaker at the right of its title                      |
+| mute a link                 | right-click it, Mute this link                                       |
+| switch a Selector           | click one of the sources listed in it                                |
+| learn what a box does       | hover the **?** in its title                                         |
 | open a box's or link's menu | right-click it                                                       |
 | remove what is selected     | **Delete**                                                           |
 | move the view               | middle button, or **Alt** + drag                                     |
@@ -188,8 +207,10 @@ inputs, so that it does not apply its voice processing to them.
 - Muting works inside Wolfe: what comes out of a microphone, a Wolfe speaker
   or an effect becomes silence, and a speaker or a Wolfe microphone is given
   silence. The device itself, and its mute in Windows, are not touched. A
-  muted box's loudspeaker is red and crossed out, and its links are grey;
-  muting is kept in the file (`"muted": true`).
+  muted box's loudspeaker is red and crossed out. A link that carries no
+  sound is grey: after a muted box, a muted link, or anywhere further along;
+  a link muted itself is dull red. Muting is kept in the file
+  (`"muted": true`).
 - Zooming goes from 39% to 214%, around the mouse, and changes only the
   view, not the positions kept in the file.
 
@@ -216,8 +237,11 @@ are not listed. A program that listens to what is played on a device (a
 screen recorder, a game streaming host) is listed as playing there: Windows
 does not tell the two apart.
 
-The bar is the level as Windows measures it (a recording device only
-has a level while something records from it). A box with an orange outline is
+The bar is the level, with its number in dB after it: for a device as
+Windows measures it (a recording device only has a level while something
+records from it), for an effect what comes out of it. The Compressor, Limiter
+and Noise gate show what goes in instead, with their threshold marked by a
+line: what goes past the line is what they act on. A box with an orange outline is
 linked but not working: its text says why. When a link cannot be made, the
 reason appears next to the mouse.
 
@@ -248,6 +272,13 @@ area (the Wolfe menu can turn that off, and can make it start with Windows);
 Exit is in that menu and on the icon. What the engine reports is written to
 `%APPDATA%\Wolfe\wolfe.log`.
 
+To take the graph to another computer, choose Export graph in the Wolfe menu
+there, and Import graph on the other one. Importing replaces what is on the
+canvas. Microphones and speakers are found by their names; one that is not
+there waits under its name, as an unplugged device does. Wolfe's devices
+keep their identity, so a graph brought back to the computer it came from
+finds its applications again. Each computer keeps its own preferences.
+
     wolfe.exe                    open the window
     wolfe.exe --tray             start hidden in the notification area
     wolfe.exe --file <file>      keep the graph in that file instead (and the log
@@ -261,11 +292,11 @@ Exit is in that menu and on the icon. What the engine reports is written to
   recording device at a time, chosen in its settings or in the application.
   Wolfe does not change that choice; it gives applications devices worth
   choosing.
-- Windows makes a new device the default one when it first appears, and
-  again every time it comes back while it is the default Windows remembers:
-  a Wolfe microphone would then be the default every time Wolfe starts.
-  Choose your own device as the default once (Settings > System > Sound) and
-  Windows remembers that instead.
+- Windows makes a new device the default one when it first appears. When
+  that happens to a device Wolfe has just made, Wolfe puts the previous
+  default back (through the interface Windows' own settings use, which is
+  not documented). A device you make the default yourself stays the default,
+  and Windows makes it the default again every time it comes back.
 - An application muted in the Windows volume mixer is silent on Wolfe's
   devices too.
 
@@ -309,7 +340,7 @@ The window writes the same format, adding where each box is drawn. Comments
 | `virtual_mic`     | one of Wolfe's recording devices            | `name`   |
 | `input`           | a recording device                          | `device` |
 | `output`          | a playback device                           | `device` |
-| an effect         | `gain`, `pan`, `compressor`, `limiter`, `gate`, `rnnoise`, `highpass`, `lowpass`, `equalizer`, `delay`, `reverb`, `chorus`, `tremolo`, `distortion`, `bitcrusher` | its settings, by the names in [Effects](#effects); one left out keeps its initial value |
+| an effect         | `mix` (Junction), `select` (Selector), `gain`, `pan`, `compressor`, `limiter`, `gate`, `rnnoise`, `highpass`, `lowpass`, `equalizer`, `delay`, `reverb`, `chorus`, `tremolo`, `distortion`, `bitcrusher` | its settings, by the names in [Effects](#effects); one left out keeps its initial value |
 
 `device` is `default`, or any part of the device name as `wolfe-cli devices`
 shows it. Devices that are missing are retried every second.
@@ -320,15 +351,15 @@ one and writes it in the file (`"serial"`); a hand-written node without one
 gets one made from its id. Keep both as they are once applications use the
 device.
 
-Several links into the same node are added together. `"margin_ms"` at the
+Several links into the same node are added together. A link with
+`"muted": true` carries silence. `"margin_ms"` at the
 top level (default 4) is extra delay given to every source; raise it if the
 report shows `late` counts that keep growing.
 
 The console program also knows a few things the window does not offer:
 `loopback` nodes (everything played on a playback device, `device`), `app`
-nodes (everything one application plays, `process`), `mix` (a junction), and
-`gain_db` on a link. In a file the window loads, `mix` nodes become gains at
-0 dB (so that their links stay), links lose their gain, and the rest is left
+nodes (everything one application plays, `process`), and `gain_db` on a
+link. In a file the window loads, links lose their gain and the rest is left
 out; its log says what was changed.
 
 <details>

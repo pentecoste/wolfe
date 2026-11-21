@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -46,6 +47,18 @@ struct Mute {
     }
 };
 
+// The loudest sample that went into and came out of an effect since a front
+// end last asked. Written by the cycle, read from anywhere.
+struct NodePeaks {
+    std::atomic<float> in{0.0f}, out{0.0f};
+
+    static void raise(std::atomic<float>& peak, const float* stereo) {
+        float loudest = 0.0f;
+        for (int i = 0; i < kQuantum * 2; i++) loudest = std::max(loudest, std::fabs(stereo[i]));
+        if (loudest > peak.load(std::memory_order_relaxed)) peak.store(loudest, std::memory_order_relaxed);
+    }
+};
+
 // What the graph computes every cycle, flattened into steps ordered so that
 // each step only depends on earlier ones. Every node that leads to an output
 // is one step, computed once per cycle whatever the number of outputs it feeds.
@@ -64,6 +77,7 @@ struct Plan {
         std::vector<Feed> feeds;
         std::vector<float> audio;               // this step's result for the current cycle
         std::shared_ptr<Mute> mute;             // silences what comes out of it
+        std::shared_ptr<NodePeaks> peaks;       // effects: their levels, for the front end
     };
     struct Sink {
         std::string nodeId;
@@ -71,7 +85,7 @@ struct Plan {
         std::shared_ptr<VirtualDevice> device;  // or for one of Wolfe's devices to take
         std::vector<Feed> feeds;
         std::vector<int> inputs;                // the reader steps that reach it, for reports
-        std::shared_ptr<Mute> mute;             // silences what goes into it
+        std::shared_ptr<Mute> mute;             // silences what goes into it (unless its step does)
     };
     std::vector<Step> steps;
     std::vector<Sink> sinks;
@@ -100,7 +114,9 @@ public:
     void addOutput(const std::string& id, const std::string& device);
     // One of Wolfe's own devices, which Windows shows like any other: a
     // speaker is an input of the graph, a microphone an output. It is added to
-    // Windows at once and taken away with the node.
+    // Windows at once and taken away with the node. What goes into a
+    // microphone can also be linked onward, as it is: a microphone is the one
+    // node that is both an output of the graph and a source.
     void addVirtualDevice(const std::string& id, const VirtualDeviceSpec& spec);
 
     // Removes a node together with its links. A device is closed, an
@@ -133,8 +149,11 @@ public:
 
     // What the node is doing, in words; empty for an unknown id.
     std::string nodeStatus(const std::string& id) const;
-    // Loudest sample of an input or output since the last call (0 for anything else).
+    // Loudest sample of a node since the last call: what an input brings, what
+    // an output plays, what comes out of an effect.
     float takeNodePeak(const std::string& id);
+    // What went into an effect, the same way (0 for anything else).
+    float takeNodeInputPeak(const std::string& id);
     // Queue and underruns of an output, and how each source reaches it.
     struct OutputReport {
         Output::Stats output;
@@ -163,6 +182,7 @@ private:
     };
 
     Kind kindOf(const std::string& id) const;
+    bool isWolfeMic(const std::string& id) const;
     void requireNewId(const std::string& id) const;
     std::shared_ptr<Link> findLink(const std::string& from, const std::string& to) const;
     std::shared_ptr<Plan> buildPlan(const Plan* previous) const;
@@ -177,6 +197,11 @@ private:
     // Each effect node's one instance, kept from plan to plan.
     std::map<std::string, std::shared_ptr<Effect>> effects_;
     std::map<std::string, std::shared_ptr<Mute>> mutes_;  // every node's, kept from plan to plan
+    std::map<std::string, std::shared_ptr<NodePeaks>> peaks_;  // every effect's
+    // A Wolfe microphone is a step that passes on what goes into it, and a sink
+    // fed by that step through one of these.
+    std::map<std::string, std::shared_ptr<Link>> throughLinks_;
+    std::shared_ptr<Effect> through_ = createEffect("mix");
     std::map<std::string, OutputNode> outputs_;
     std::map<std::string, std::shared_ptr<VirtualDevice>> virtuals_;
     // Wolfe's speakers as captured from their endpoints: Windows hands over

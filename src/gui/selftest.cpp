@@ -80,6 +80,22 @@ SelfTest::SelfTest(Controller& controller, std::string reportPath)
     tapKey(ImGuiKey_Escape);
     check("Escape closes the menu", [] { return !anyMenuOpen(); });
 
+    // The link's menu mutes it: its first item, reached from the keyboard. (The
+    // menu opens with the keyboard on its first item, unseen until a key moves it.)
+    const auto linkMuted = [this] { return controller_.links().size() == 1 && controller_.links()[0].muted; };
+    click(onLink, 1);
+    tapKey(ImGuiKey_DownArrow);  // (shows where the keyboard is: on the second item)
+    tapKey(ImGuiKey_UpArrow);
+    tapKey(ImGuiKey_Enter);
+    check("\"Mute this link\" in its menu mutes the link", [this, linkMuted] {
+        return linkMuted() && controller_.silentLinks().count(controller_.links()[0].uid) == 1 && !anyMenuOpen();
+    });
+    click(onLink, 1);
+    tapKey(ImGuiKey_DownArrow);  // (shows where the keyboard is: on the second item)
+    tapKey(ImGuiKey_UpArrow);
+    tapKey(ImGuiKey_Enter);
+    check("and again unmutes it", [linkMuted] { return !linkMuted(); });
+
     ctrlClick(onLink);
     check("Ctrl + click on a link removes it", [this] { return controller_.links().empty(); });
 
@@ -163,6 +179,20 @@ SelfTest::SelfTest(Controller& controller, std::string reportPath)
     });
     click(onMute);
     check("and clicking it again unmutes it", [this] { return !controller_.node(second_)->muted; });
+
+    // The "?" just left of the loudspeaker says what the box is for.
+    const Place onHelp = [onMute] {
+        const ImVec2 mute = onMute();
+        return ImVec2(mute.x - ImGui::GetFontSize() - ImGui::GetStyle().ItemSpacing.x * 0.5f, mute.y);
+    };
+    moveTo(onHelp);
+    wait(10);
+    check("hovering the \"?\" explains the box", [] {
+        ImGuiWindow* tooltip = ImGui::FindWindowByName("##Tooltip_00");
+        return tooltip && tooltip->Active;
+    });
+    click(onHelp);
+    check("and clicking it does not mute the box", [this] { return !controller_.node(second_)->muted; });
 
     auto gains = std::make_shared<int>(0);
     const auto countGains = [this] {

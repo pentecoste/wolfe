@@ -17,6 +17,7 @@ struct EffectParameter {
     float min, max, initial;
     bool logarithmic;    // dragged on a logarithmic scale (frequencies, times)
     float dragSpeed;     // how much one pixel of dragging changes it
+    const char* atMin = nullptr;  // shown in place of the value at the minimum, where it means "none" ("silent")
 };
 
 // A kind of effect.
@@ -27,6 +28,9 @@ struct EffectType {
     const char* words;  // more words a search finds it by
     bool offered;       // the editor offers it (the others are for the console program)
     std::vector<EffectParameter> parameters;
+    // What it is for and what each setting does, a few short lines for the
+    // box's "?"; a good place to start, if there is one.
+    const char* help = "";
 };
 
 // Every kind of effect, those the editor offers in the order it lists them.

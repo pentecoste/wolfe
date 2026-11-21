@@ -23,6 +23,7 @@ struct NodeDescription {
     // EffectType); one left out keeps its initial value.
     std::map<std::string, double> parameters;
     bool muted = false;  // passes on silence (see Graph::setMuted)
+    std::string selected;  // a selector: the node whose link into it it lets through (empty: the first)
     bool hasPosition = false;  // where the graphical editor drew it
     float x = 0, y = 0;
 };
@@ -30,6 +31,7 @@ struct NodeDescription {
 struct LinkDescription {
     std::string from, to;
     double gainDb = 0.0;
+    bool muted = false;  // carries silence
 };
 
 struct GraphDescription {
@@ -57,5 +59,9 @@ void buildGraph(const GraphDescription& description, Graph& graph);
 
 // The one node-creating step, shared with the graphical editor.
 void addNode(const NodeDescription& node, Graph& graph);
+
+// The node a selector lets through: the one it names if a link from it comes
+// in, otherwise the first that does (empty with none). `inputs` in link order.
+std::string selectedInput(const std::string& named, const std::vector<std::string>& inputs);
 
 }  // namespace wolfe

@@ -111,16 +111,21 @@ inline float blend(float dry, float wet, float mix) { return dry + (wet - dry) *
 
 // --- level ------------------------------------------------------------------
 
+// Passes on what comes in. (A selector is one too: Wolfe silences the links
+// into it that are not chosen.)
 class MixEffect : public Effect {
 public:
     void process(float*) override {}
 };
 
-// A change of gain is spread over one cycle, so that it does not click.
+// A change of gain is spread over one cycle, so that it does not click. At
+// the bottom of its range it is silent.
 class GainEffect : public Effect {
 public:
+    static constexpr float kSilentDb = -60.0f;
+
     void process(float* stereo) override {
-        const float target = factorOf(parameter(0));
+        const float target = parameter(0) <= kSilentDb ? 0.0f : factorOf(parameter(0));
         const float step = (target - current_) / kQuantum;
         for (int i = 0; i < kQuantum; i++) {
             const float gain = current_ + step * (i + 1);
@@ -441,30 +446,45 @@ public:
     }
 
     void process(float* stereo) override {
-        const float amount = parameter(0) / 100.0f;
+        const float amount = parameter(0) / 100.0f, gate = parameter(1) / 100.0f;
         bool same = true;
         for (int i = 0; i < kQuantum && same; i++) same = stereo[i * 2] == stereo[i * 2 + 1];
 
         float clean[2][kQuantum];
+        float voice = 0.0f;  // how sure RNNoise is that someone speaks, 0..1
         for (int side = 0; side < (same ? 1 : 2); side++) {
             float frame[kQuantum];
             for (int i = 0; i < kQuantum; i++) frame[i] = stereo[i * 2 + side] * 32768.0f;
-            rnnoise_process_frame(states_[side], clean[side], frame);
+            voice = std::max(voice, rnnoise_process_frame(states_[side], clean[side], frame));
         }
         if (same) std::copy(clean[0], clean[0] + kQuantum, clean[1]);
 
+        // The voice gate. RNNoise judges the frame that came in, and hands
+        // back the one before it: the gate opens over the frame just ahead
+        // of the voice, so the first syllable is whole. It stays open a while
+        // after the voice, for the pauses between words, then fades out.
+        if (gate <= 0.0f || voice >= gate) held_ = kHoldFrames;
+        else if (held_ > 0) held_--;
+        const float target = held_ > 0 ? 1.0f : 0.0f;
+        const float step = target > gate_ ? 1.0f / kQuantum : -1.0f / (kQuantum * kCloseFrames);
+
         for (int i = 0; i < kQuantum; i++) {
+            gate_ = step > 0 ? std::min(target, gate_ + step) : std::max(target, gate_ + step);
             for (int side = 0; side < 2; side++) {
                 const float original = stereo[i * 2 + side];
-                stereo[i * 2 + side] = blend(previous_[i * 2 + side], clean[side][i] / 32768.0f, amount);
+                stereo[i * 2 + side] = blend(previous_[i * 2 + side], clean[side][i] / 32768.0f, amount) * gate_;
                 previous_[i * 2 + side] = original;
             }
         }
     }
 
 private:
+    static constexpr int kHoldFrames = 30;  // 300 ms
+    static constexpr int kCloseFrames = 5;  // 50 ms
     DenoiseState* states_[2];
     float previous_[kQuantum * 2] = {};  // the last frame as it came in
+    int held_ = kHoldFrames;
+    float gate_ = 1.0f;
 };
 
 }  // namespace
@@ -474,57 +494,138 @@ const std::vector<EffectType>& effectTypes() {
     // editor drags logarithmic ones across their whole range in a few
     // hundred pixels.
     static const std::vector<EffectType> types = {
+        // --- routing
+        {"mix", "Junction", "passes the sound on as it is", "junction pass through buffer split join bypass", true, {},
+         "Passes on what comes into it, unchanged.\n"
+         "Use it as a point to split or join links, or to\n"
+         "mute one branch of the graph with its loudspeaker."},
+        {"select", "Selector", "lets one of its inputs through", "selector switch choose source input one of", true, {},
+         "Link several sources into it: only the one\n"
+         "picked in the box goes on, the others are silent.\n"
+         "Click another line in the box to switch."},
+        // --- level
         {"gain", "Gain", "louder or quieter", "volume level louder quieter", true,
-         {{"gain_db", "%+.1f dB", -100, 40, 0, false, 0.1f}}},
+         {{"gain_db", "%+.1f dB", -60, 24, 0, false, 0.1f, "silent"}},
+         "Makes the sound louder or quieter.\n"
+         "0 dB leaves it as it is, -6 dB is about half as\n"
+         "loud to the ear, +6 dB twice; all the way down is silence.\n"
+         "Raising it a lot can clip: keep the meter out of the red."},
         {"pan", "Pan", "more to the left or to the right", "balance stereo left right", true,
-         {{"pan", "Pan %+.0f", -100, 100, 0, false, 0.5f}}},
+         {{"pan", "Pan %+.0f", -100, 100, 0, false, 0.5f}},
+         "Moves the sound to the left (-100) or to the right\n"
+         "(+100): the other side gets quieter. 0 is the middle."},
         {"compressor", "Compressor", "evens out loud and quiet", "dynamics", true,
          {{"threshold_db", "Threshold %.0f dB", -60, 0, -20, false, 0.2f},
           {"ratio", "Ratio %.1f:1", 1, 20, 4, true, 0},
           {"attack_ms", "Attack %.1f ms", 0.1f, 100, 5, true, 0},
           {"release_ms", "Release %.0f ms", 10, 2000, 150, true, 0},
-          {"makeup_db", "Makeup %+.1f dB", 0, 30, 0, false, 0.1f}}},
+          {"makeup_db", "Makeup %+.1f dB", 0, 30, 0, false, 0.1f}},
+         "Turns down what goes over the threshold, so that\n"
+         "loud and quiet moments are closer together.\n"
+         "Threshold: the level where it starts. The box's meter\n"
+         "  shows what comes in, with the threshold marked.\n"
+         "Ratio: 4:1 lets 1 dB out for every 4 dB over.\n"
+         "Attack / Release: how fast it reacts and lets go.\n"
+         "Makeup: raises everything afterwards.\n"
+         "Start with the threshold where the meter peaks, ratio 3-4."},
         {"limiter", "Limiter", "never louder than its ceiling", "clip protect peak", true,
          {{"ceiling_db", "Ceiling %.1f dB", -30, 0, -1, false, 0.1f},
-          {"release_ms", "Release %.0f ms", 5, 1000, 50, true, 0}}},
+          {"release_ms", "Release %.0f ms", 5, 1000, 50, true, 0}},
+         "Never lets the sound go over its ceiling.\n"
+         "Levels are in dB below full scale: 0 dB is the\n"
+         "loudest digital audio can be. The box's meter shows\n"
+         "what comes in, with the ceiling marked: only what\n"
+         "goes past the mark is turned down.\n"
+         "Ceiling: -1 dB protects against clipping; lower it to\n"
+         "  tame sudden loud sounds.\n"
+         "Release: how quickly it lets go afterwards."},
         {"gate", "Noise gate", "silent below a level", "noise gate expander mute", true,
          {{"threshold_db", "Threshold %.0f dB", -90, 0, -50, false, 0.2f},
-          {"release_ms", "Release %.0f ms", 10, 2000, 200, true, 0}}},
+          {"release_ms", "Release %.0f ms", 10, 2000, 200, true, 0}},
+         "Silent while the sound stays under the threshold,\n"
+         "open as soon as it goes over it.\n"
+         "Threshold: between the noise (while you are quiet)\n"
+         "  and your voice; the box's meter shows what comes in,\n"
+         "  with the threshold marked.\n"
+         "Release: how slowly it closes after you stop."},
         {"rnnoise", "Noise suppression", "keeps the voice, removes the rest (RNNoise)",
-         "noise suppression denoise rnnoise background voice", true,
-         {{"amount", "Amount %.0f%%", 0, 100, 100, false, 0.3f}}},
+         "noise suppression denoise rnnoise background voice keyboard", true,
+         {{"amount", "Amount %.0f%%", 0, 100, 100, false, 0.3f},
+          {"voice_gate", "Voice gate %.0f%%", 0, 100, 50, false, 0.3f, "Voice gate off"}},
+         "RNNoise, the neural network Mumble uses, takes\n"
+         "steady noise out of a voice: fans, hum, traffic.\n"
+         "Amount: how much of it is removed.\n"
+         "Voice gate: RNNoise also says how sure it is that\n"
+         "  someone is speaking. Below this certainty the sound\n"
+         "  is muted, which stops keyboard clicks and other\n"
+         "  short noises between words. Raise it if they get\n"
+         "  through, lower it if your words get cut."},
+        // --- tone
         {"highpass", "High-pass", "cuts the lows: rumble, hum", "highpass hpf filter low cut bass", true,
          {{"cutoff_hz", "Cutoff %.0f Hz", 20, 5000, 100, true, 0},
-          {"q", "Resonance %.2f", 0.3f, 10, 0.71f, true, 0}}},
+          {"q", "Resonance %.2f", 0.3f, 10, 0.71f, true, 0}},
+         "Lets the highs through and cuts what is below the\n"
+         "cutoff. For a voice, 80-120 Hz removes rumble.\n"
+         "Resonance: a bump just at the cutoff; 0.71 is flat."},
         {"lowpass", "Low-pass", "cuts the highs: hiss, harshness", "lowpass lpf filter high cut treble", true,
          {{"cutoff_hz", "Cutoff %.0f Hz", 200, 20000, 8000, true, 0},
-          {"q", "Resonance %.2f", 0.3f, 10, 0.71f, true, 0}}},
+          {"q", "Resonance %.2f", 0.3f, 10, 0.71f, true, 0}},
+         "Lets the lows through and cuts what is above the\n"
+         "cutoff: hiss, harshness. Lower makes it duller.\n"
+         "Resonance: a bump just at the cutoff; 0.71 is flat."},
         {"equalizer", "Equalizer", "lows, mids and highs", "eq bass treble tone", true,
          {{"low_db", "Low %+.1f dB", -24, 24, 0, false, 0.1f},
           {"mid_db", "Mid %+.1f dB", -24, 24, 0, false, 0.1f},
-          {"high_db", "High %+.1f dB", -24, 24, 0, false, 0.1f}}},
+          {"high_db", "High %+.1f dB", -24, 24, 0, false, 0.1f}},
+         "Raises or lowers three parts of the sound:\n"
+         "Low below 150 Hz, Mid around 1 kHz, High above 5 kHz.\n"
+         "0 dB leaves a part as it is."},
+        // --- space and time
         {"delay", "Delay", "echoes", "echo repeat", true,
-         {{"time_ms", "Time %.0f ms", 1, 2000, 300, true, 0},
-          {"feedback", "Feedback %.0f%%", 0, 95, 35, false, 0.3f},
-          {"mix", "Mix %.0f%%", 0, 100, 30, false, 0.3f}}},
+         {{"time_ms", "Every %.0f ms", 1, 2000, 300, true, 0},
+          {"feedback", "Repeats %.0f%%", 0, 95, 35, false, 0.3f},
+          {"mix", "Mix %.0f%% wet", 0, 100, 30, false, 0.3f}},
+         "Echoes of the sound.\n"
+         "Every: the time between one echo and the next.\n"
+         "Repeats: how loud each echo is compared to the one\n"
+         "  before; 0% is a single echo, high values go on long.\n"
+         "Mix: the original and the echoes in proportion;\n"
+         "  0% only the original, 100% only the echoes."},
         {"reverb", "Reverb", "a room around the sound", "room hall space", true,
          {{"size", "Size %.0f%%", 0, 100, 60, false, 0.3f},
           {"damping", "Damping %.0f%%", 0, 100, 50, false, 0.3f},
-          {"mix", "Mix %.0f%%", 0, 100, 25, false, 0.3f}}},
+          {"mix", "Mix %.0f%% wet", 0, 100, 25, false, 0.3f}},
+         "Puts the sound in a room.\n"
+         "Size: from a small room to a large hall.\n"
+         "Damping: how quickly the highs die away; more is warmer.\n"
+         "Mix: the original and the room in proportion;\n"
+         "  100% is only the room (for a branch of its own)."},
         {"chorus", "Chorus", "thicker, shimmering", "modulation ensemble", true,
          {{"rate_hz", "Rate %.2f Hz", 0.05f, 5, 0.8f, true, 0},
           {"depth_ms", "Depth %.1f ms", 0, 10, 3, false, 0.03f},
-          {"mix", "Mix %.0f%%", 0, 100, 50, false, 0.3f}}},
+          {"mix", "Mix %.0f%% wet", 0, 100, 50, false, 0.3f}},
+         "Adds a copy that drifts slightly in time, which\n"
+         "makes the sound thicker.\n"
+         "Rate: how fast it drifts. Depth: how far.\n"
+         "Mix: the original and the copy in proportion."},
         {"tremolo", "Tremolo", "volume that pulses", "modulation pulse", true,
          {{"rate_hz", "Rate %.1f Hz", 0.1f, 20, 5, true, 0},
-          {"depth", "Depth %.0f%%", 0, 100, 50, false, 0.3f}}},
+          {"depth", "Depth %.0f%%", 0, 100, 50, false, 0.3f}},
+         "The volume goes down and back up, over and over.\n"
+         "Rate: how many times a second. Depth: how far down."},
+        // --- character
         {"distortion", "Distortion", "drive, saturation", "overdrive fuzz saturation", true,
          {{"drive_db", "Drive %.0f dB", 0, 40, 15, false, 0.1f},
-          {"mix", "Mix %.0f%%", 0, 100, 100, false, 0.3f}}},
+          {"mix", "Mix %.0f%% wet", 0, 100, 100, false, 0.3f}},
+         "Rounds off the peaks of the sound: warm at a little\n"
+         "drive, fuzzy at a lot.\n"
+         "Mix: the original and the distorted sound in proportion."},
         {"bitcrusher", "Bitcrusher", "lo-fi: fewer bits, fewer samples", "lofi bit crush downsample", true,
          {{"bits", "Bits %.0f", 1, 16, 8, false, 0.03f},
-          {"rate_hz", "Rate %.0f Hz", 500, 48000, 8000, true, 0}}},
-        {"mix", "Mix", "a junction", "", false, {}},
+          {"rate_hz", "Rate %.0f Hz", 500, 48000, 8000, true, 0}},
+         "Old-computer sound.\n"
+         "Bits: fewer is grainier. Rate: lower is more muffled\n"
+         "and metallic."},
     };
     return types;
 }
@@ -552,7 +653,7 @@ std::shared_ptr<Effect> createEffect(const std::string& type) {
     else if (type == "tremolo") effect = std::make_shared<TremoloEffect>();
     else if (type == "distortion") effect = std::make_shared<DistortionEffect>();
     else if (type == "bitcrusher") effect = std::make_shared<BitcrusherEffect>();
-    else if (type == "mix") effect = std::make_shared<MixEffect>();
+    else if (type == "mix" || type == "select") effect = std::make_shared<MixEffect>();
     else if (type == "rnnoise") effect = std::make_shared<RnnoiseEffect>();
     else return nullptr;
     const EffectType* description = findEffectType(type);

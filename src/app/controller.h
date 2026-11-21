@@ -7,6 +7,7 @@
 #include <condition_variable>
 #include <map>
 #include <mutex>
+#include <set>
 #include <string>
 #include <thread>
 #include <vector>
@@ -21,6 +22,7 @@ enum class NodeKind {
     Effect,        // changes what comes into it and passes it on: a gain, a filter, a reverb... (see effect.h)
     Output,        // sink: a playback device of the computer (headphones, speakers...)
     WolfeMic,      // sink: one of Wolfe's own recording devices; applications that record from it hear it
+                   // (what goes into it can also be linked onward, as from a source)
 };
 
 // An application that has a stream open on a node's device: one that plays
@@ -46,13 +48,17 @@ struct Node {
     // Effects: the value of each of the type's parameters, in their order.
     std::vector<float> parameters;
     bool muted = false;   // passes on silence, inside Wolfe only
+    // A selector: the id of the node whose link into it goes through, as the
+    // user chose it (see Controller::selectedInput()).
+    std::string selected;
 
     bool resolved = false;  // devices: `target` is the device's own id, not part of its name
     bool present = false;   // the device is plugged in (Wolfe's: Windows has it)
     bool active = false;    // it exists in the engine
     bool healthy = false;   // in the engine and doing its job
     std::string status;     // what the engine says about it
-    float level = 0.0f;     // recent peak, 0..1, falling back on its own
+    float level = 0.0f;     // recent peak, 0..1, falling back on its own: what comes out of it (a sink: what it plays)
+    float inputLevel = 0.0f;  // effects: the same for what goes into it
     // Devices: the applications using it, those with audio flowing first
     // (Wolfe itself left out). Known only while somebody looks at the canvas.
     std::vector<AppUse> apps;
@@ -62,8 +68,11 @@ struct Node {
 
     bool isWolfeDevice() const { return kind == NodeKind::WolfeSpeaker || kind == NodeKind::WolfeMic; }
     bool isDevice() const { return kind == NodeKind::Input || kind == NodeKind::Output; }
+    bool isSelector() const { return kind == NodeKind::Effect && type == "select"; }
     // Whether it has a pin audio comes out of / goes into.
-    bool givesLinks() const { return kind == NodeKind::Input || kind == NodeKind::WolfeSpeaker || kind == NodeKind::Effect; }
+    bool givesLinks() const {
+        return kind == NodeKind::Input || kind == NodeKind::WolfeSpeaker || kind == NodeKind::Effect || kind == NodeKind::WolfeMic;
+    }
     bool takesLinks() const { return kind == NodeKind::Output || kind == NodeKind::WolfeMic || kind == NodeKind::Effect; }
 };
 
@@ -71,6 +80,7 @@ struct Node {
 struct Connection {
     int uid = 0;
     int from = 0, to = 0;  // node uids
+    bool muted = false;    // carries silence
 };
 
 // The devices on the computer at one moment, Wolfe's own included (they
@@ -109,6 +119,22 @@ public:
     std::string load();
     void save();
 
+    // The graph in a file of the user's choosing, to take to another
+    // computer. Returns an empty string, or what went wrong.
+    std::string exportTo(const std::string& path);
+    // Replaces the graph with one from a file. The computer's devices are
+    // found by their names when their ids are unknown here (another
+    // computer); Wolfe's devices keep their identity, so a graph brought back
+    // to the computer it came from finds its applications again. This
+    // computer's preferences stay as they are. Returns what could not be
+    // used, if anything; nothing is changed when the file cannot be read.
+    std::string importFrom(const std::string& path, bool* imported = nullptr);
+    // A first graph to start from: music played on a Wolfe speaker goes to
+    // the headphones and, quieter, into a Wolfe microphone, together with the
+    // computer's microphone cleaned of noise. Uses the default devices.
+    // Returns what could not be made, if anything.
+    std::string buildExample();
+
     // Call regularly: picks up discoveries, refreshes statuses and levels,
     // saves a moment after the last change.
     void update(double now);
@@ -126,6 +152,18 @@ public:
     std::string move(int linkUid, int fromUid, int toUid);
     void disconnect(int linkUid);
     void disconnectAll(int nodeUid);
+    // A muted link carries silence; the boxes at its ends go on as they were.
+    void setLinkMuted(int linkUid, bool muted);
+
+    // A selector lets through one of the nodes linked into it: the one the
+    // user chose, or the first if that one is not linked any more.
+    void select(int selectorUid, int fromUid);
+    int selectedInput(int selectorUid) const;  // its uid; 0 with nothing linked
+    // The nodes linked into a node, in the order their links were made.
+    std::vector<int> inputsOf(int nodeUid) const;
+    // The links that carry no sound because of a mute (of a box or a link,
+    // here or anywhere before) or a selector, for the canvas to grey out.
+    std::set<int> silentLinks() const;
 
     // An effect of one of the types effectTypes() offers. 0 for any other type.
     int addEffect(const std::string& type, float x, float y);
@@ -152,6 +190,8 @@ public:
     // A few lines about a node or a link, for a tooltip.
     std::string describeNode(int nodeUid);
     std::string describeLink(int linkUid) const;
+    // What a box is for, for its "?".
+    static std::string helpFor(const Node& node);
 
     bool closeToTray() const { return closeToTray_; }
     void setCloseToTray(bool value);
@@ -169,8 +209,12 @@ private:
     std::string adopt(const GraphDescription& description);
     void clear();
 
-    std::string link(int fromUid, int toUid);
+    std::string link(int fromUid, int toUid, bool muted = false);
     void unlink(int linkUid);
+    float gainOf(const Connection& link) const;  // what the engine is told to carry
+    void applyGains(int toUid);                   // after a change to what goes into a node
+    GraphDescription describe() const;
+    void expectNewDevice(const std::string& serial);
     void ensureEngine(Node& node);
     void syncEngine(int nodeUid);
     bool reaches(int fromUid, int toUid) const;
@@ -204,6 +248,7 @@ private:
     bool lookNow_ = false;
     bool hasPending_ = false;
     std::map<std::string, float> devicePeaks_;  // highest level read since the canvas last asked, by device id
+    std::vector<std::string> newDevices_;       // serials of Wolfe devices Windows has never had (see DefaultKeeper)
     Discovery pending_;
 };
 

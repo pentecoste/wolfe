@@ -69,6 +69,11 @@ Graph::Kind Graph::kindOf(const std::string& id) const {
     return Kind::None;
 }
 
+bool Graph::isWolfeMic(const std::string& id) const {
+    auto found = virtuals_.find(id);
+    return found != virtuals_.end() && found->second->spec().recording;
+}
+
 void Graph::requireNewId(const std::string& id) const {
     if (id.empty()) throw std::runtime_error("a node needs an id");
     if (kindOf(id) != Kind::None) throw std::runtime_error("duplicate node id \"" + id + "\"");
@@ -84,9 +89,10 @@ void Graph::addInput(const std::string& id, InputSpec spec) {
 
 void Graph::addEffect(const std::string& id, const std::string& type) {
     requireNewId(id);
-    mutes_[id] = std::make_shared<Mute>();
     std::shared_ptr<Effect> effect = createEffect(type);
     if (!effect) throw std::runtime_error("unknown effect type \"" + type + "\"");
+    mutes_[id] = std::make_shared<Mute>();
+    peaks_[id] = std::make_shared<NodePeaks>();
     effects_[id] = std::move(effect);
 }
 
@@ -118,6 +124,10 @@ void Graph::addVirtualDevice(const std::string& id, const VirtualDeviceSpec& spe
         tap.wolfeSerial = spec.serial;
         taps_[id] = std::make_unique<Input>(std::move(tap));
         if (running_) taps_[id]->start();
+    } else {
+        auto through = std::make_shared<Link>();
+        through->from = through->to = id;
+        throughLinks_[id] = through;
     }
     virtuals_[id] = virtualDevices_->add(spec);
 }
@@ -148,6 +158,8 @@ void Graph::removeNode(const std::string& id) {
     }
     effects_.erase(id);
     mutes_.erase(id);
+    peaks_.erase(id);
+    throughLinks_.erase(id);
     std::shared_ptr<VirtualDevice> device;
     std::unique_ptr<Input> tap;
     if (auto found = virtuals_.find(id); found != virtuals_.end()) {
@@ -174,6 +186,12 @@ float Graph::takeNodePeak(const std::string& id) {
     if (auto found = inputs_.find(id); found != inputs_.end()) return found->second->buffer()->takePeak();
     if (auto found = outputs_.find(id); found != outputs_.end()) return found->second.output->takePeak();
     if (auto found = virtuals_.find(id); found != virtuals_.end()) return found->second->timeline()->takePeak();
+    if (auto found = peaks_.find(id); found != peaks_.end()) return found->second->out.exchange(0.0f);
+    return 0.0f;
+}
+
+float Graph::takeNodeInputPeak(const std::string& id) {
+    if (auto found = peaks_.find(id); found != peaks_.end()) return found->second->in.exchange(0.0f);
     return 0.0f;
 }
 
@@ -206,7 +224,9 @@ void Graph::addLink(const std::string& from, const std::string& to, float gain) 
     const Kind fromKind = kindOf(from), toKind = kindOf(to);
     if (fromKind == Kind::None) throw std::runtime_error("link from unknown node \"" + from + "\"");
     if (toKind == Kind::None) throw std::runtime_error("link to unknown node \"" + to + "\"");
-    if (fromKind == Kind::Output) throw std::runtime_error("\"" + from + "\" is an output: nothing can come out of it");
+    if (fromKind == Kind::Output && !isWolfeMic(from)) {
+        throw std::runtime_error("\"" + from + "\" is an output: nothing can come out of it");
+    }
     if (toKind == Kind::Input) throw std::runtime_error("\"" + to + "\" is an input: nothing can go into it");
     if (findLink(from, to)) throw std::runtime_error("\"" + from + "\" is already linked to \"" + to + "\"");
 
@@ -297,7 +317,7 @@ std::shared_ptr<Plan> Graph::buildPlan(const Plan* previous) const {
         if (input != inputs_.end()) {
             step.reader = old && old->reader ? old->reader
                                              : std::make_shared<SourceReader>(input->second->buffer(), marginSeconds_);
-        } else if (device != virtuals_.end()) {
+        } else if (device != virtuals_.end() && !device->second->spec().recording) {
             step.device = device->second;
             if (auto tap = taps_.find(id); tap != taps_.end()) {
                 step.tap = tap->second.get();
@@ -305,7 +325,10 @@ std::shared_ptr<Plan> Graph::buildPlan(const Plan* previous) const {
                                                  : std::make_shared<SourceReader>(tap->second->buffer(), marginSeconds_);
             }
         } else {
-            step.effect = effects_.at(id);
+            // An effect, or a Wolfe microphone passing on what goes into it.
+            const bool microphone = device != virtuals_.end();
+            step.effect = microphone ? through_ : effects_.at(id);
+            if (!microphone) step.peaks = peaks_.at(id);
             for (const auto& link : links_) {
                 if (link->to != id) continue;
                 const int from = visit(link->from);
@@ -328,13 +351,18 @@ std::shared_ptr<Plan> Graph::buildPlan(const Plan* previous) const {
         }
         Plan::Sink sink;
         sink.nodeId = id;
-        if (auto mute = mutes_.find(id); mute != mutes_.end()) sink.mute = mute->second;
         sink.feed = std::move(feed);
         sink.device = std::move(device);
-        for (const auto& link : links_) {
-            if (link->to != id) continue;
-            const int from = visit(link->from);
-            sink.feeds.push_back({from, link, appliedGain(oldFeeds, link)});
+        if (auto through = throughLinks_.find(id); through != throughLinks_.end()) {
+            // A microphone: its step has already mixed and muted what goes into it.
+            sink.feeds.push_back({visit(id), through->second, appliedGain(oldFeeds, through->second)});
+        } else {
+            if (auto mute = mutes_.find(id); mute != mutes_.end()) sink.mute = mute->second;
+            for (const auto& link : links_) {
+                if (link->to != id) continue;
+                const int from = visit(link->from);
+                sink.feeds.push_back({from, link, appliedGain(oldFeeds, link)});
+            }
         }
         plan->sinks.push_back(std::move(sink));
     };
@@ -502,9 +530,11 @@ void Graph::runCycle(Plan& plan, int64_t cycle, const std::string& leaderId, flo
         } else if (!step.reader) {
             std::memset(audio, 0, kQuantumSamples * sizeof(float));
             mixFeeds(plan, step.feeds, audio);
+            if (step.peaks) NodePeaks::raise(step.peaks->in, audio);
             step.effect->process(audio);
         }
         if (step.mute) step.mute->apply(audio);
+        if (step.peaks) NodePeaks::raise(step.peaks->out, audio);
     }
     float out[kQuantumSamples];
     for (Plan::Sink& sink : plan.sinks) {

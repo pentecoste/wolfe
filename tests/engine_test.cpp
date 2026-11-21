@@ -300,6 +300,7 @@ void testRnnoiseNode() {
     std::uniform_real_distribution<float> noise(-0.1f, 0.1f);
     auto compare = [&](bool sidesDiffer) {
         std::shared_ptr<Effect> node = createEffect("rnnoise");
+        set(*node, "rnnoise", "voice_gate", 0);
         DenoiseState* direct[2] = {rnnoise_create(nullptr), rnnoise_create(nullptr)};
         double largestDifference = 0;
         for (int frame = 0; frame < 300; frame++) {
@@ -354,6 +355,43 @@ void testRnnoiseNode() {
            voiceIn, voiceOut);
     expect(after < -75.0, "a microphone's hiss is taken away");
     expect(std::fabs(voiceOut - voiceIn) < 1.5, "a voice comes through");
+
+    // The voice gate: typing between words. Keys are short loud clicks, ten
+    // a second; RNNoise lets much of them through, the gate does not.
+    std::uniform_real_distribution<float> crack(-1.0f, 1.0f);
+    const Signal typing = [&](int frame) {
+        const int intoClick = frame % (kSampleRate / 10);
+        const float envelope = intoClick < 240 ? 0.3f * (float)std::exp(-intoClick / 40.0) : 0.0f;
+        return envelope * crack(random) + hiss(random);
+    };
+    std::shared_ptr<Effect> ungated = createEffect("rnnoise");
+    set(*ungated, "rnnoise", "voice_gate", 0);
+    std::shared_ptr<Effect> gated = createEffect("rnnoise");
+    const double clicksIn = rmsDb(run(*createEffect("gain"), 3.0, typing), 1.0);
+    const double clicksUngated = rmsDb(run(*ungated, 3.0, typing), 1.0);
+    const double clicksGated = rmsDb(run(*gated, 3.0, typing), 1.0);
+    printf("    typing goes in at %.0f dB; out at %.0f dB without the voice gate, %.0f dB with it at 50%%\n", clicksIn,
+           clicksUngated, clicksGated);
+    expect(clicksGated < clicksUngated - 20.0, "the voice gate keeps typing out");
+
+    // Words with pauses: the voice comes through whole, the gate does not
+    // chop it, and the pauses between them stay open (no pumping).
+    const Signal talking = [&](int frame) {
+        const double second = (double)frame / kSampleRate;
+        const bool speaking = std::fmod(second, 1.0) < 0.6;
+        return speaking ? buzz(frame) : hiss(random);
+    };
+    node = createEffect("rnnoise");
+    const std::vector<float> spoken = run(*node, 4.0, talking);
+    std::shared_ptr<Effect> plain = createEffect("rnnoise");
+    set(*plain, "rnnoise", "voice_gate", 0);
+    const std::vector<float> unchanged = run(*plain, 4.0, talking);
+    double worst = 0;
+    for (double start = 1.05; start < 3.5; start += 1.0) {
+        worst = std::max(worst, std::fabs(rmsDb(spoken, start, start + 0.5) - rmsDb(unchanged, start, start + 0.5)));
+    }
+    printf("    words through the voice gate differ by at most %.2f dB from without it\n", worst);
+    expect(worst < 0.5, "words come through the voice gate whole");
 }
 
 // A node's mute fades its audio out over one cycle, then keeps it silent,

@@ -64,18 +64,91 @@ std::string fit(const std::string& text, float width) {
     return shortened + "...";
 }
 
-// A level meter: -60 dB at the left edge, 0 dB at the right.
-void drawMeter(float level, float width, float height, bool enabled) {
-    ImGui::Dummy(ImVec2(width, height));
-    const ImVec2 from = ImGui::GetItemRectMin(), to = ImGui::GetItemRectMax();
+// A level meter, -60 dB at the left edge and 0 dB (full scale) at the right,
+// with the level in numbers after it. `prefix` goes before the number ("in ");
+// `markDb`, if given, is drawn as a line across the bar: a threshold.
+void drawMeter(float level, float width, float height, bool enabled, const char* prefix = "", float markDb = NAN) {
+    const float line = ImGui::GetTextLineHeight();
+    ImGui::Dummy(ImVec2(width, line));
+    const ImVec2 corner = ImGui::GetItemRectMin();
     ImDrawList* draw = ImGui::GetWindowDrawList();
+    // Room for the longest number, so that bars line up from box to box.
+    const float room = ImGui::CalcTextSize("in -60 dB").x + ImGui::GetStyle().ItemSpacing.x;
+    const ImVec2 from(corner.x, corner.y + (line - height) * 0.5f), to(corner.x + width - room, from.y + height);
     draw->AddRectFilled(from, to, IM_COL32(0, 0, 0, enabled ? 110 : 50), height * 0.5f);
-    if (!enabled || level <= 0.001f) return;
-    const float db = 20.0f * std::log10(level);
-    const float filled = std::max(0.0f, std::min(1.0f, (db + 60.0f) / 60.0f));
-    const ImU32 colour = db > -1.0f ? IM_COL32(230, 80, 70, 255) : db > -12.0f ? IM_COL32(230, 200, 80, 255) : IM_COL32(90, 200, 120, 255);
-    draw->AddRectFilled(from, ImVec2(from.x + (to.x - from.x) * filled, to.y), colour, height * 0.5f);
+    if (!enabled) return;
+
+    const float db = level > 0.001f ? 20.0f * std::log10(level) : -100.0f;
+    const auto across = [&](float decibels) { return from.x + (to.x - from.x) * std::max(0.0f, std::min(1.0f, (decibels + 60.0f) / 60.0f)); };
+    if (db > -60.0f) {
+        const ImU32 colour = db > -1.0f ? IM_COL32(230, 80, 70, 255) : db > -12.0f ? IM_COL32(230, 200, 80, 255) : IM_COL32(90, 200, 120, 255);
+        draw->AddRectFilled(from, ImVec2(across(db), to.y), colour, height * 0.5f);
+    }
+    if (!std::isnan(markDb)) {
+        const float x = across(markDb), reach = std::max(2.0f, height * 0.7f);
+        draw->AddLine(ImVec2(x, from.y - reach), ImVec2(x, to.y + reach), IM_COL32(240, 240, 245, 230), std::max(1.0f, height * 0.35f));
+    }
+    char text[32];
+    if (db > -60.0f) snprintf(text, sizeof(text), "%s%.0f dB", prefix, db);
+    else snprintf(text, sizeof(text), "%s-- dB", prefix);
+    const float textWidth = ImGui::CalcTextSize(text).x;
+    draw->AddText(ImVec2(corner.x + width - textWidth, corner.y), ImGui::GetColorU32(ImGuiCol_TextDisabled), text);
 }
+
+// Where a setting's value lies along its range, 0..1, as dragging it goes.
+float fractionOf(const EffectParameter& parameter, float value) {
+    if (parameter.logarithmic && parameter.min > 0.0f) {
+        return std::log(value / parameter.min) / std::log(parameter.max / parameter.min);
+    }
+    return (value - parameter.min) / (parameter.max - parameter.min);
+}
+
+// One setting of an effect: a field dragged left or right, or typed after a
+// double click, with a bar behind it that shows where the value lies in its
+// range. A setting that goes below and above zero fills from zero. Returns
+// true when the user changed the value.
+bool drawSetting(const EffectParameter& parameter, float& value, float width) {
+    const ImVec2 from = ImGui::GetCursorScreenPos();
+    const ImVec2 to(from.x + width, from.y + ImGui::GetFrameHeight());
+    const float rounding = ImGui::GetStyle().FrameRounding;
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    draw->AddRectFilled(from, to, ImGui::GetColorU32(ImGuiCol_FrameBg), rounding);
+    const float zero = !parameter.logarithmic && parameter.min < 0.0f && parameter.max > 0.0f ? fractionOf(parameter, 0.0f) : 0.0f;
+    const float at = std::max(0.0f, std::min(1.0f, fractionOf(parameter, value)));
+    const float left = from.x + width * std::min(zero, at), right = from.x + width * std::max(zero, at);
+    if (right - left >= 1.0f) {
+        draw->AddRectFilled(ImVec2(left, from.y), ImVec2(right, to.y), IM_COL32(110, 150, 215, 110),
+                            left <= from.x + 0.5f || right >= to.x - 0.5f ? rounding : 0.0f);
+    }
+
+    const float speed = parameter.logarithmic ? (parameter.max - parameter.min) / 250.0f : parameter.dragSpeed;
+    const ImGuiSliderFlags flags = ImGuiSliderFlags_AlwaysClamp | (parameter.logarithmic ? ImGuiSliderFlags_Logarithmic : 0);
+    // At the bottom, some settings mean "none": they say so instead of a number.
+    const char* format = parameter.atMin && value <= parameter.min ? parameter.atMin : parameter.format;
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(0, 0, 0, 0));
+    ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, IM_COL32(255, 255, 255, 18));
+    ImGui::PushStyleColor(ImGuiCol_FrameBgActive, IM_COL32(255, 255, 255, 30));
+    ImGui::SetNextItemWidth(width);
+    const bool changed = ImGui::DragFloat("##value", &value, speed, parameter.min, parameter.max, format, flags);
+    ImGui::PopStyleColor(3);
+    return changed;
+}
+
+// A "?" in a circle in a square of `size` at `at`.
+void drawHelpIcon(ImVec2 at, float size, bool hovered) {
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    const ImU32 colour = IM_COL32(255, 255, 255, hovered ? 255 : 150);
+    const ImVec2 centre(at.x + size * 0.5f, at.y + size * 0.5f);
+    if (hovered) draw->AddCircleFilled(centre, size * 0.46f, IM_COL32(0, 0, 0, 70));
+    draw->AddCircle(centre, size * 0.42f, colour, 0, std::max(1.0f, size * 0.07f));
+    const ImVec2 mark = ImGui::CalcTextSize("?");
+    const float shrink = 0.75f;
+    draw->AddText(nullptr, ImGui::GetFontSize() * shrink,
+                  ImVec2(centre.x - mark.x * shrink * 0.5f, centre.y - mark.y * shrink * 0.5f), colour, "?");
+}
+
+// Effects whose meter shows what goes in, with their first setting (a level) marked on it.
+bool metersItsInput(const std::string& type) { return type == "limiter" || type == "compressor" || type == "gate"; }
 
 // "Spotify, Firefox +2": as many names as fit in `width`, and how many more there are.
 std::string namesThatFit(const std::vector<std::string>& names, float width) {
@@ -262,6 +335,7 @@ void Editor::draw(double now) {
     drawMenus();
     drawSearch();
     drawDialogs();
+    drawWelcome();
     ImGui::EndChild();
 
     drawFlash();
@@ -279,6 +353,9 @@ void Editor::drawMenuBar() {
         const bool apps = controller_.showApps();
         if (ImGui::MenuItem("Show applications in boxes", nullptr, apps)) controller_.setShowApps(!apps);
         ImGui::Separator();
+        if (ImGui::MenuItem("Import graph...")) fileRequest = FileRequest::Import;
+        if (ImGui::MenuItem("Export graph...", nullptr, false, !controller_.nodes().empty())) fileRequest = FileRequest::Export;
+        ImGui::Separator();
         if (ImGui::MenuItem("Exit")) exitRequested = true;
         ImGui::EndMenu();
     }
@@ -292,9 +369,82 @@ void Editor::drawMenuBar() {
         if (ImGui::MenuItem("Zoom in", "Ctrl++", false, zoomWanted_ < kZoomIn)) zoomBy(1, canvasCentre_);
         if (ImGui::MenuItem("Zoom out", "Ctrl+-", false, zoomWanted_ > kZoomOut)) zoomBy(-1, canvasCentre_);
         if (ImGui::MenuItem("Actual size", "Ctrl+0", false, zoomWanted_ != 0)) zoomTo(0, canvasCentre_);
+        ImGui::Separator();
+        if (ImGui::MenuItem("Show everything", nullptr, false, !controller_.nodes().empty())) showAll();
+        ImGui::EndMenu();
+    }
+    if (ImGui::BeginMenu("Help")) {
+        if (ImGui::MenuItem("Getting started")) showWelcome();
+        ImGui::TextDisabled("Each box explains itself: hover its \"?\".");
         ImGui::EndMenu();
     }
     ImGui::EndMenuBar();
+}
+
+void Editor::showWelcome() {
+    welcome_ = true;
+    welcomeOpened_ = false;
+}
+
+// The window that explains the basics, at the first start and from the Help
+// menu, with the example to start from.
+void Editor::drawWelcome() {
+    const char* const title = "Welcome to Wolfe";
+    if (welcome_ && !welcomeOpened_) {
+        ImGui::OpenPopup(title);
+        welcomeOpened_ = true;
+    }
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + viewport->WorkSize.x * 0.5f, viewport->WorkPos.y + viewport->WorkSize.y * 0.5f),
+                            ImGuiCond_Always, ImVec2(0.5f, 0.5f));  // (its height is known only once it is drawn)
+    ImGui::SetNextWindowSize(ImVec2(560.0f * scale_, 0.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(18.0f * scale_, 14.0f * scale_));
+    const bool open = ImGui::BeginPopupModal(title, nullptr, ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoResize);
+    ImGui::PopStyleVar();
+    if (!open) {
+        if (welcomeOpened_) welcome_ = welcomeOpened_ = false;
+        return;
+    }
+
+    const ImVec4 strong(0.85f, 0.88f, 0.95f, 1.0f);
+    ImGui::PushTextWrapPos(0.0f);
+    ImGui::TextUnformatted("Wolfe makes speakers and microphones of its own, which Windows lists like any other, and "
+                           "wires them to your real ones through effects.");
+    ImGui::Spacing();
+    ImGui::TextColored(strong, "1.  Add boxes");
+    ImGui::TextUnformatted("Right-click the canvas, or press Ctrl+A and type. Add your microphone and headphones, the "
+                           "effects you want, and Wolfe speakers or microphones.");
+    ImGui::Spacing();
+    ImGui::TextColored(strong, "2.  Link them");
+    ImGui::TextUnformatted("Drag from a box's \"out\" to another box's \"in\": the sound goes that way. Right-click a "
+                           "link or a box for more; the loudspeaker in a box's title mutes it.");
+    ImGui::Spacing();
+    ImGui::TextColored(strong, "3.  Give the devices to applications");
+    ImGui::TextUnformatted("In Windows, Settings > System > Sound > Volume mixer, give an application a Wolfe speaker: "
+                           "what it plays comes into Wolfe. In a chat program, choose a Wolfe microphone: it hears "
+                           "what you link into it.");
+    ImGui::Spacing();
+    ImGui::TextDisabled("Not sure what a box does? Hover the \"?\" in its title.");
+    ImGui::Separator();
+    ImGui::TextUnformatted("The example plays what goes to \"Wolfe Music\" (give it to your music player) on your "
+                           "headphones and, quieter, into \"Wolfe Chat\" with your microphone cleaned of noise "
+                           "(choose it as the microphone in your chat program).");
+    ImGui::PopTextWrapPos();
+    ImGui::Spacing();
+
+    if (ImGui::Button("Build the example")) {
+        const std::string problems = controller_.buildExample();
+        if (!problems.empty()) flash(problems);
+        showAll();
+        welcome_ = false;
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button(controller_.nodes().empty() ? "Start empty" : "Close") || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+        welcome_ = false;
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
 }
 
 // ---------------------------------------------------------------------------
@@ -348,22 +498,36 @@ void Editor::openSearch(ImVec2 screenPosition) {
 }
 
 // The Add menu, in the menu bar and on a right click on the canvas: the
-// search, the effects, and Wolfe's own devices. (The computer's devices are
-// added from the search.)
+// search, the effects, Wolfe's own devices and the computer's.
 void Editor::addItems(ImVec2 screenPosition) {
     if (ImGui::MenuItem("Search...", "Ctrl+A")) openSearch(screenPosition);
     ImGui::Separator();
     const std::vector<Choice> all = choices();
     for (const Choice& choice : all) {
         if (choice.kind != Choice::Effect) continue;
-        // Level, tone, space and time, character.
-        if (choice.target == "highpass" || choice.target == "delay" || choice.target == "distortion") ImGui::Separator();
+        // Routing, level, tone, space and time, character.
+        if (choice.target == "gain" || choice.target == "highpass" || choice.target == "delay" || choice.target == "distortion") {
+            ImGui::Separator();
+        }
         if (ImGui::MenuItem(choice.title.c_str())) choose(choice, screenPosition);
     }
     ImGui::Separator();
     for (const Choice& choice : all) {
         if (choice.kind != Choice::WolfeSpeaker && choice.kind != Choice::WolfeMic) continue;
         if (ImGui::MenuItem((choice.title + "...").c_str())) choose(choice, screenPosition);
+    }
+    ImGui::Separator();
+    // The computer's own, those not on the canvas yet.
+    for (const Choice::Kind kind : {Choice::Microphone, Choice::Speaker}) {
+        if (!ImGui::BeginMenu(kind == Choice::Microphone ? "Microphones" : "Speakers and headphones")) continue;
+        bool any = false;
+        for (const Choice& choice : all) {
+            if (choice.kind != kind) continue;
+            any = true;
+            if (ImGui::MenuItem(choice.title.substr(choice.title.find(": ") + 2).c_str())) choose(choice, screenPosition);
+        }
+        if (!any) ImGui::TextDisabled("All of them are on the canvas already.");
+        ImGui::EndMenu();
     }
 }
 
@@ -580,17 +744,24 @@ void Editor::drawNode(const Node& node) {
     std::string title = node.label, second = node.detail;
     if (node.isDevice()) splitDeviceName(node.label, title, second);
 
-    // The title, and at its right the mute switch: red while muted.
+    // The title, and at its right a "?" that says what the box is for and the
+    // mute switch, red while muted.
     ImNodes::BeginNodeTitleBar();
     const float titleX = ImGui::GetCursorPosX();
-    const float muteWidth = ImGui::GetFontSize();
-    ImGui::TextUnformatted(fit(title, width - muteWidth - ImGui::GetStyle().ItemSpacing.x).c_str());
+    const float button = ImGui::GetFontSize(), gap = ImGui::GetStyle().ItemSpacing.x;
+    ImGui::TextUnformatted(fit(title, width - 2.0f * button - 2.0f * gap).c_str());
+    ImGui::PushID(node.uid);
     // (SameLine with a position would count it from elsewhere inside the node's group.)
     ImGui::SameLine();
-    ImGui::SetCursorPosX(titleX + width - muteWidth);
-    ImGui::PushID(node.uid);
-    if (ImGui::InvisibleButton("##mute", ImVec2(muteWidth, muteWidth))) controller_.setMuted(node.uid, !node.muted);
-    drawSpeakerIcon(ImGui::GetItemRectMin(), muteWidth, node.muted, ImGui::IsItemHovered());
+    ImGui::SetCursorPosX(titleX + width - 2.0f * button - gap * 0.5f);
+    ImGui::InvisibleButton("##help", ImVec2(button, button));
+    const bool helpHovered = ImGui::IsItemHovered();
+    drawHelpIcon(ImGui::GetItemRectMin(), button, helpHovered);
+    if (helpHovered) helpTip_ = Controller::helpFor(node);
+    ImGui::SameLine();
+    ImGui::SetCursorPosX(titleX + width - button);
+    if (ImGui::InvisibleButton("##mute", ImVec2(button, button))) controller_.setMuted(node.uid, !node.muted);
+    drawSpeakerIcon(ImGui::GetItemRectMin(), button, node.muted, ImGui::IsItemHovered());
     ImGui::PopID();
     ImNodes::EndNodeTitleBar();
     if (!second.empty()) ImGui::TextUnformatted(fit(second, width).c_str());
@@ -632,16 +803,9 @@ void Editor::drawNode(const Node& node) {
             if (count == 0) {
                 ImGui::Dummy(ImVec2(fieldWidth, ImGui::GetFrameHeight()));
             } else {
-                const EffectParameter& parameter = type->parameters[i];
                 float value = node.parameters[i];
-                const float speed = parameter.logarithmic ? (parameter.max - parameter.min) / 250.0f : parameter.dragSpeed;
-                const ImGuiSliderFlags flags =
-                    ImGuiSliderFlags_AlwaysClamp | (parameter.logarithmic ? ImGuiSliderFlags_Logarithmic : 0);
-                ImGui::SetNextItemWidth(fieldWidth);
                 ImGui::PushID(i);
-                if (ImGui::DragFloat("##value", &value, speed, parameter.min, parameter.max, parameter.format, flags)) {
-                    controller_.setParameter(node.uid, i, value);
-                }
+                if (drawSetting(type->parameters[i], value, fieldWidth)) controller_.setParameter(node.uid, i, value);
                 ImGui::PopID();
             }
             if (i == 0) {
@@ -652,7 +816,32 @@ void Editor::drawNode(const Node& node) {
                 ImNodes::EndOutputAttribute();
             }
         }
+
+        // A selector: the sources linked into it, one line each; a click on
+        // one lets it through instead of the others.
+        if (node.isSelector()) {
+            const std::vector<int> inputs = controller_.inputsOf(node.uid);
+            const int chosen = controller_.selectedInput(node.uid);
+            if (inputs.empty()) ImGui::TextDisabled("%s", fit("link sources into \"in\"", width).c_str());
+            for (int from : inputs) {
+                const Node* source = controller_.node(from);
+                if (!source) continue;
+                std::string name = source->label, adapter;
+                if (source->isDevice()) splitDeviceName(source->label, name, adapter);
+                ImGui::PushID(from);
+                const float radio = ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x;
+                if (ImGui::RadioButton(fit(name, width - radio).c_str(), from == chosen)) controller_.select(node.uid, from);
+                ImGui::PopID();
+            }
+        }
         ImGui::PopID();
+
+        // What goes in (with the level the effect acts at marked on it) or what comes out.
+        if (type && metersItsInput(node.type) && !node.parameters.empty()) {
+            drawMeter(node.inputLevel, width, 5.0f * view(), node.active, "in ", node.parameters[0]);
+        } else {
+            drawMeter(node.level, width, 5.0f * view(), node.active);
+        }
     } else {
         // A few words saying what it is doing, on the line with the pin.
         std::string state;
@@ -683,11 +872,21 @@ void Editor::drawNode(const Node& node) {
         }
 
         if (node.takesLinks()) {
+            // (A Wolfe microphone passes on what goes into it: "out" at the right.)
+            const float rowX = ImGui::GetCursorPosX();
+            const float out = node.givesLinks() ? ImGui::CalcTextSize("out").x + ImGui::GetStyle().ItemSpacing.x : 0.0f;
             ImNodes::BeginInputAttribute(inputPin(node.uid));
-            ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + width);
+            ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + width - out);
             ImGui::TextColored(colour, "%s", state.c_str());
             ImGui::PopTextWrapPos();
             ImNodes::EndInputAttribute();
+            if (node.givesLinks()) {
+                ImGui::SameLine();
+                ImGui::SetCursorPosX(rowX + width - ImGui::CalcTextSize("out").x);
+                ImNodes::BeginOutputAttribute(outputPin(node.uid));
+                ImGui::TextUnformatted("out");
+                ImNodes::EndOutputAttribute();
+            }
         } else {
             ImNodes::BeginOutputAttribute(outputPin(node.uid));
             // Right-aligned when it fits on one line, wrapped from the left when it does not.
@@ -716,6 +915,18 @@ void Editor::drawCanvas() {
     grabLinks_ = ImGui::GetIO().KeyCtrl || !overPin_;
 
     applyZoom();
+    // Everything on the canvas in view: after an import or the example.
+    if (showAllWanted_ && !controller_.nodes().empty()) {
+        showAllWanted_ = false;
+        float left = FLT_MAX, top = FLT_MAX;
+        for (const Node& node : controller_.nodes()) {
+            left = std::min(left, node.x);
+            top = std::min(top, node.y);
+        }
+        const float margin = 40.0f * scale_;
+        ImNodes::EditorContextResetPanning(ImVec2(margin - left * view(), margin - top * view()));
+    }
+    helpTip_.clear();
     ImNodes::BeginNodeEditor();
     gridOrigin_ = ImGui::GetCursorScreenPos();
     // Inside the boxes, text and spacing at the zoom's size.
@@ -733,15 +944,15 @@ void Editor::drawCanvas() {
         drawNode(node);
     }
     // (A link that was pulled off its pin is in the user's hand, not here.)
+    // Grey when no sound goes through it, because of a mute here or anywhere
+    // before it, or a selector; a link muted itself is a dull red.
+    const std::set<int> silent = controller_.silentLinks();
     for (const Connection& link : controller_.links()) {
         if (link.uid == heldLink_) continue;
-        // Grey when nothing goes through it: one of its ends is muted.
-        const Node* from = controller_.node(link.from);
-        const Node* to = controller_.node(link.to);
-        const bool silent = (from && from->muted) || (to && to->muted);
-        if (silent) ImNodes::PushColorStyle(ImNodesCol_Link, IM_COL32(95, 100, 112, 255));
+        const bool quiet = link.muted || silent.count(link.uid);
+        if (quiet) ImNodes::PushColorStyle(ImNodesCol_Link, link.muted ? IM_COL32(150, 82, 88, 255) : IM_COL32(95, 100, 112, 255));
         ImNodes::Link(link.uid, outputPin(link.from), inputPin(link.to));
-        if (silent) ImNodes::PopColorStyle();
+        if (quiet) ImNodes::PopColorStyle();
     }
     ImGui::PopStyleVar(4);
     ImGui::PopFont();
@@ -845,9 +1056,10 @@ void Editor::drawCanvas() {
             ImGui::OpenPopup("canvas menu");
         }
     } else if (!ImGui::IsMouseDown(ImGuiMouseButton_Left) && (flash_.empty() || now_ >= flashUntil_)) {
-        const std::string text = overNode ? controller_.describeNode(hoveredNode)
-                                 : overLink ? controller_.describeLink(hoveredLink)
-                                            : std::string();
+        const std::string text = !helpTip_.empty() ? helpTip_
+                                 : overNode       ? controller_.describeNode(hoveredNode)
+                                 : overLink       ? controller_.describeLink(hoveredLink)
+                                                  : std::string();
         if (!text.empty()) ImGui::SetTooltip("%s", text.c_str());
     }
 }
@@ -900,10 +1112,13 @@ void Editor::drawMenus() {
             ImGui::CloseCurrentPopup();
         } else {
             const int uid = link->uid;
+            const bool muted = link->muted;
             ImGui::TextDisabled("%s  ->  %s", controller_.node(link->from)->label.c_str(),
                                 controller_.node(link->to)->label.c_str());
             ImGui::Separator();
-            if (ImGui::MenuItem("Remove this link", "Ctrl+click")) controller_.disconnect(uid);
+            // Each of these may change the list of links: `link` is not used after them.
+            if (ImGui::MenuItem("Mute this link", nullptr, muted)) controller_.setLinkMuted(uid, !muted);
+            else if (ImGui::MenuItem("Remove this link", "Ctrl+click")) controller_.disconnect(uid);
         }
         ImGui::EndPopup();
     }

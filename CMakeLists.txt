@@ -41,6 +41,7 @@ add_library(wolfe_engine STATIC
     src/app_devices.cpp
     src/common.cpp
     src/config.cpp
+    src/default_devices.cpp
     src/devices.cpp
     src/effect.cpp
     src/graph.cpp
@@ -73,7 +74,7 @@ add_executable(wolfe WIN32
 target_compile_options(wolfe PRIVATE -Wall -Wextra)
 # Windows' own constants (cursors and the like) in their wide-character form.
 target_compile_definitions(wolfe PRIVATE UNICODE _UNICODE)
-target_link_libraries(wolfe PRIVATE wolfe_app imgui shell32)
+target_link_libraries(wolfe PRIVATE wolfe_app imgui shell32 comdlg32)
 # -static: no MinGW runtime DLLs needed next to the exe.
 target_link_options(wolfe PRIVATE -static)
 
@@ -96,7 +97,7 @@ target_link_options(wolfe-sigtool PRIVATE -static)
 add_executable(wolfe-makeicon tools/makeicon.cpp src/gui/shell.cpp)
 target_include_directories(wolfe-makeicon PRIVATE src)
 target_compile_definitions(wolfe-makeicon PRIVATE UNICODE _UNICODE)
-target_link_libraries(wolfe-makeicon PRIVATE wolfe_engine shell32 gdi32)
+target_link_libraries(wolfe-makeicon PRIVATE wolfe_engine shell32 gdi32 comdlg32)
 target_link_options(wolfe-makeicon PRIVATE -static)
 
 add_executable(wolfe-uacproto tools/uacproto.cpp)

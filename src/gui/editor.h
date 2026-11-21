@@ -22,6 +22,17 @@ public:
     void draw(double now);
 
     bool exitRequested = false;  // the user chose Exit
+    // The user chose Import or Export: the program asks for the file between
+    // two frames, then sets this back to None.
+    enum class FileRequest { None, Import, Export };
+    FileRequest fileRequest = FileRequest::None;
+
+    // The window that explains the basics and offers the example.
+    void showWelcome();
+    // Moves the view so that every box is in it.
+    void showAll() { showAllWanted_ = true; }
+    // Says something next to the mouse for a few seconds (a problem, mostly).
+    void flash(const std::string& message);
 
 private:
     // Something that can be added to the canvas, as the search lists it.
@@ -46,8 +57,7 @@ private:
     void openSearch(ImVec2 screenPosition);
     void askToRemove(int nodeUid);
     void placeNew(int uid, ImVec2 screenPosition);
-    // Says why something the user just did was refused, next to the mouse, for a few seconds.
-    void flash(const std::string& message);
+    void drawWelcome();
     // Zoom: steps of 10%, 0 being the actual size.
     void zoomBy(int steps, ImVec2 pivot);
     void zoomTo(int step, ImVec2 pivot);
@@ -104,6 +114,10 @@ private:
 
     std::string flash_;
     double flashUntil_ = 0;
+
+    std::string helpTip_;        // the "?" under the mouse in this frame says this
+    bool showAllWanted_ = false;
+    bool welcome_ = false, welcomeOpened_ = false;
 };
 
 }  // namespace wolfe

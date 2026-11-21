@@ -5,6 +5,7 @@
 // would open the real device.
 #include "app/controller.h"
 #include "app_devices.h"
+#include "default_devices.h"
 
 #include <cmath>
 #include <cstdio>
@@ -146,7 +147,7 @@ void testGains() {
         controller.setParameter(first, 0, -6.0f);
         expect(controller.node(first)->parameters[0] == -6.0f, "the gain changes");
         controller.setParameter(second, 0, 1000.0f);
-        expect(controller.node(second)->parameters[0] == 40.0f, "within limits");
+        expect(controller.node(second)->parameters[0] == 24.0f, "within limits");
 
         const int link = linkBetween(controller, mic, first);
         expect(controller.move(link, mic, second).empty() && hasLink(controller, mic, second) &&
@@ -234,8 +235,13 @@ void testEffects() {
             made += node && node->label == type.name && node->parameters.size() == type.parameters.size() ? 1 : 0;
         }
         expect(offered >= 10 && made == offered, "every effect offered can be added, with its settings");
-        expect(controller.addEffect("mix", 0, 0) == 0 && controller.addEffect("nonsense", 0, 0) == 0,
-               "one that is not offered cannot");
+        expect(controller.addEffect("nonsense", 0, 0) == 0, "one that does not exist cannot");
+        for (const EffectType& type : effectTypes()) {
+            if (type.offered && std::string(type.help).empty()) printf("    (%s has no help)\n", type.type);
+        }
+        bool helped = true;
+        for (const EffectType& type : effectTypes()) helped &= !type.offered || std::string(type.help).size() > 20;
+        expect(helped, "every effect offered says what it is for");
 
         const int filter = controller.addEffect("lowpass", 700, 100);
         const int reverb = controller.addEffect("reverb", 700, 300);
@@ -320,7 +326,8 @@ void testWolfeDevices() {
                "it exists in the engine at once, with a serial number of its own");
         expect(controller.node(chat)->serial != speaker->serial, "every device has its own");
         expect(speaker->givesLinks() && !speaker->takesLinks(), "Wolfe's speaker is a source");
-        expect(controller.node(chat)->takesLinks() && !controller.node(chat)->givesLinks(), "Wolfe's microphone is a sink");
+        expect(controller.node(chat)->takesLinks() && controller.node(chat)->givesLinks(),
+               "Wolfe's microphone is a sink, and passes on what goes into it");
         serial = speaker->serial;
 
         Discovery discovery = system();
@@ -337,7 +344,14 @@ void testWolfeDevices() {
         expect(controller.connect(mic, chat).empty(), "microphone -> Wolfe's microphone connects");
         expect(controller.connect(music, chat).empty(), "and Wolfe's speaker into it too");
         expect(!controller.connect(phones, music).empty(), "nothing goes into Wolfe's speaker");
-        expect(!controller.connect(chat, phones).empty(), "nothing comes out of Wolfe's microphone");
+        expect(controller.connect(chat, phones).empty(), "what goes into Wolfe's microphone can go on to the headphones");
+        expect(!controller.connect(chat, chat).empty() && !controller.connect(phones, chat).empty(),
+               "but not back into itself, and nothing comes out of the headphones");
+        const int gain = controller.addEffect("gain", 600, 500);
+        expect(controller.connect(chat, gain).empty() && !controller.connect(gain, chat).empty(),
+               "a loop through Wolfe's microphone is refused");
+        controller.removeNode(gain);
+        controller.disconnect(linkBetween(controller, chat, phones));
 
         controller.disconnectAll(music);
         expect(controller.node(music)->active, "unlinked, Wolfe's device stays: applications may use it");
@@ -459,12 +473,214 @@ void testOldFile() {
         if (node.id == "fx|2") junction = &node;
         if (node.id == "fx|1") denoise = &node;
     }
-    expect(junction && junction->kind == NodeKind::Effect && junction->parameters[0] == 0.0f, "a junction is a gain at 0 dB");
-    expect(denoise && denoise->type == "rnnoise" && denoise->parameters.size() == 1 && denoise->parameters[0] == 100.0f,
-           "noise suppression is noise suppression, at full amount");
+    expect(junction && junction->kind == NodeKind::Effect && junction->type == "mix" && junction->label == "Junction",
+           "a junction is a junction");
+    expect(denoise && denoise->type == "rnnoise" && denoise->parameters.size() == 2 && denoise->parameters[0] == 100.0f &&
+               denoise->parameters[1] == 50.0f,
+           "noise suppression is noise suppression, at full amount, with the voice gate it did not have");
     expect(controller.nodes().size() == 4 && controller.links().size() == 3, "the rest is there");
     const Node* mic = byLabel(controller, kMic);
     expect(mic && mic->x < junction->x, "a box with no place of its own is laid out with the others");
+}
+
+void testLinkMuting() {
+    printf("muting a link\n");
+    const std::string document = tempFile("wolfe-test-linkmute.json");
+    {
+        Controller controller(document, false);
+        controller.apply(system());
+        const int mic = controller.addDevice(true, "{fake-mic}", 100, 100);
+        const int junction = controller.addEffect("mix", 400, 100);
+        const int first = controller.addEffect("gain", 700, 100), second = controller.addEffect("gain", 700, 300);
+        controller.connect(mic, junction);
+        controller.connect(junction, first);
+        controller.connect(junction, second);
+        const int toSecond = linkBetween(controller, junction, second);
+        expect(controller.silentLinks().empty(), "nothing muted, every link carries sound");
+        controller.setLinkMuted(toSecond, true);
+        expect(controller.silentLinks() == std::set<int>{toSecond}, "a muted link is silent, the others are not");
+        controller.save();
+    }
+    expect(readFile(document).find("\"muted\": true") != std::string::npos, "a muted link is written in the file");
+    Controller reloaded(document, false);
+    expect(reloaded.load().empty(), "the file loads");
+    int muted = 0;
+    for (const Connection& link : reloaded.links()) muted += link.muted ? 1 : 0;
+    expect(muted == 1, "and the link is muted again after loading");
+}
+
+void testSilence() {
+    printf("which links carry silence\n");
+    const std::string document = tempFile("wolfe-test-silence.json");
+    Controller controller(document, false);
+    controller.apply(system());
+    const int mic = controller.addDevice(true, "{fake-mic}", 100, 100);
+    const int a = controller.addEffect("gain", 300, 100), b = controller.addEffect("gain", 500, 100);
+    const int phones = controller.addDevice(false, "{fake-phones}", 700, 100);
+    const int other = controller.addEffect("gain", 300, 300);
+    controller.connect(mic, a);
+    controller.connect(a, b);
+    controller.connect(b, phones);
+    controller.connect(other, b);  // nothing goes into this one
+    const int micToA = linkBetween(controller, mic, a), aToB = linkBetween(controller, a, b);
+    const int bToPhones = linkBetween(controller, b, phones), otherToB = linkBetween(controller, other, b);
+    expect(controller.silentLinks() == std::set<int>{otherToB}, "a box with nothing coming in gives silence");
+    controller.setMuted(a, true);
+    expect(controller.silentLinks() == std::set<int>{micToA, aToB, bToPhones, otherToB},
+           "a muted box silences the links into it and everything after it");
+    controller.setMuted(a, false);
+    controller.setMuted(mic, true);
+    expect(controller.silentLinks().size() == 4, "and so does a muted source");
+    controller.setMuted(mic, false);
+    controller.setLinkMuted(micToA, true);
+    expect(controller.silentLinks().count(bToPhones) == 1, "a muted link silences what comes after it too");
+    controller.setLinkMuted(micToA, false);
+    controller.setMuted(phones, true);
+    expect(controller.silentLinks() == std::set<int>{bToPhones, otherToB}, "a muted sink only silences the links into it");
+}
+
+void testSelector() {
+    printf("a selector\n");
+    const std::string document = tempFile("wolfe-test-selector.json");
+    int chosenUid = 0;
+    {
+        Controller controller(document, false);
+        controller.apply(system());
+        const int mic = controller.addDevice(true, "{fake-mic}", 100, 100);
+        const int cable = controller.addDevice(true, "{fake-cable-out}", 100, 300);
+        const int third = controller.addEffect("gain", 100, 500);
+        const int selector = controller.addEffect("select", 400, 100);
+        const int phones = controller.addDevice(false, "{fake-phones}", 700, 100);
+        expect(selector && controller.node(selector)->isSelector(), "a selector can be added");
+        expect(controller.selectedInput(selector) == 0, "with nothing linked it lets nothing through");
+        controller.connect(mic, selector);
+        controller.connect(cable, selector);
+        controller.connect(third, selector);
+        controller.connect(selector, phones);
+        expect(controller.inputsOf(selector) == std::vector<int>({mic, cable, third}), "its inputs, in the order they were linked");
+        expect(controller.selectedInput(selector) == mic, "the first one goes through until another is chosen");
+        const std::set<int> silent = controller.silentLinks();
+        expect(!silent.count(linkBetween(controller, mic, selector)) && silent.count(linkBetween(controller, cable, selector)),
+               "the others carry silence");
+        controller.select(selector, cable);
+        expect(controller.selectedInput(selector) == cable, "choosing another switches to it");
+        expect(controller.silentLinks().count(linkBetween(controller, mic, selector)) == 1, "and the first is silent now");
+        controller.select(selector, phones);  // not one of its inputs
+        expect(controller.selectedInput(selector) == cable, "something that is not linked into it cannot be chosen");
+        controller.disconnect(linkBetween(controller, cable, selector));
+        expect(controller.selectedInput(selector) == mic, "its choice unlinked, the first one goes through");
+        controller.connect(cable, selector);
+        expect(controller.selectedInput(selector) == mic, "and stays when the other comes back");
+        controller.select(selector, third);
+        chosenUid = third;
+        controller.save();
+    }
+    expect(readFile(document).find("\"selected\"") != std::string::npos, "the choice is written in the file");
+    Controller reloaded(document, false);
+    expect(reloaded.load().empty(), "the file loads");
+    const Node* selector = nullptr;
+    for (const Node& node : reloaded.nodes()) {
+        if (node.isSelector()) selector = &node;
+    }
+    const int chosen = selector ? reloaded.selectedInput(selector->uid) : 0;
+    expect(chosen && reloaded.node(chosen)->type == "gain", "and it is the same one after loading");
+    (void)chosenUid;
+}
+
+void testImportExport() {
+    printf("taking a graph to another computer\n");
+    const std::string document = tempFile("wolfe-test-export-home.json");
+    const std::string exported = tempFile("wolfe-test-exported.json");
+    std::string serial;
+    {
+        Controller controller(document, false);
+        controller.apply(system());
+        std::string problem;
+        const int music = controller.addWolfeDevice(false, "Wolfe Music", 100, 100, &problem);
+        const int mic = controller.addDevice(true, "{fake-mic}", 100, 300);
+        const int phones = controller.addDevice(false, "{fake-phones}", 700, 100);
+        const int gain = controller.addEffect("gain", 400, 300);
+        controller.setParameter(gain, 0, -9.0f);
+        controller.connect(music, phones);
+        controller.connect(mic, gain);
+        controller.connect(gain, phones);
+        serial = controller.node(music)->serial;
+        expect(controller.exportTo(exported).empty(), "the graph is exported to a file");
+    }
+
+    // Another computer: the same microphone under another id, no headphones,
+    // a graph of its own and other preferences.
+    const std::string elsewhere = tempFile("wolfe-test-export-away.json");
+    Controller away(elsewhere, false);
+    Discovery there;
+    there.inputs.push_back({kMic, L"{another-mic-id}", true, {}});
+    away.apply(there);
+    away.setCloseToTray(false);
+    away.addEffect("reverb", 0, 0);
+    bool imported = false;
+    expect(!away.importFrom(tempFile("wolfe-test-missing.json"), &imported).empty() && !imported &&
+               away.nodes().size() == 1,
+           "a file that cannot be read changes nothing");
+    away.importFrom(exported, &imported);
+    expect(imported, "the exported file is imported");
+    expect(away.nodes().size() == 4 && away.links().size() == 3, "it replaces the graph that was there");
+    const Node* mic = firstOf(away, NodeKind::Input);
+    expect(mic && mic->present && mic->target == "{another-mic-id}", "the microphone is found by its name");
+    const Node* phones = firstOf(away, NodeKind::Output);
+    expect(phones && !phones->present && phones->label == kPhones, "missing headphones wait under their name");
+    const Node* music = firstOf(away, NodeKind::WolfeSpeaker);
+    expect(music && music->serial == serial, "Wolfe's speaker keeps its identity");
+    expect(!away.closeToTray(), "this computer's preferences stay");
+    const Node* gain = nullptr;
+    for (const Node& node : away.nodes()) {
+        if (node.type == "gain") gain = &node;
+    }
+    expect(gain && gain->parameters[0] == -9.0f, "settings come along");
+}
+
+void testExample() {
+    printf("the example to start from\n");
+    const std::string document = tempFile("wolfe-test-example.json");
+    Controller controller(document, false);
+    controller.apply(system());
+    const std::string problems = controller.buildExample();
+    expect(problems.empty(), "it is made without problems");
+    expect(firstOf(controller, NodeKind::WolfeSpeaker) && firstOf(controller, NodeKind::WolfeMic),
+           "with a Wolfe speaker and a Wolfe microphone");
+    const Node* mic = firstOf(controller, NodeKind::Input);
+    const Node* phones = firstOf(controller, NodeKind::Output);
+    expect(mic && mic->target == "{fake-mic}" && phones && phones->target == "{fake-phones}", "and the default devices");
+    expect(controller.nodes().size() == 6 && controller.links().size() == 5, "six boxes, five links");
+    expect(controller.silentLinks().empty(), "nothing silent");
+    Controller again(tempFile("wolfe-test-example2.json"), false);
+    expect(!again.buildExample().empty(), "without devices to use it says what is missing");
+}
+
+void testDefaultKeeper() {
+    printf("Windows' default device and a new device of Wolfe's\n");
+    DefaultKeeper keeper;
+    std::map<std::wstring, std::string> present = {{L"{phones}", ""}, {L"{speakers}", ""}};
+    std::map<ERole, std::wstring> phones = {{eConsole, L"{phones}"}, {eMultimedia, L"{phones}"}, {eCommunications, L"{speakers}"}};
+    expect(keeper.decide(eRender, present, phones, 0).empty(), "nothing new, nothing done");
+    keeper.expect("NEW1");
+    expect(keeper.decide(eRender, present, phones, 1).empty(), "before Windows has the new device, nothing done");
+    present[L"{wolfe}"] = "new1";
+    std::map<ERole, std::wstring> taken = {{eConsole, L"{wolfe}"}, {eMultimedia, L"{wolfe}"}, {eCommunications, L"{speakers}"}};
+    std::vector<DefaultKeeper::Change> changes = keeper.decide(eRender, present, taken, 2);
+    expect(changes.size() == 2 && changes[0].device == L"{phones}" && changes[1].device == L"{phones}",
+           "made the default by Windows: the headphones are put back, role by role");
+    expect(keeper.decide(eRender, present, taken, 3).empty(), "only once: chosen again, it is the user's choice");
+
+    DefaultKeeper other;
+    other.expect("NEW2");
+    std::map<std::wstring, std::string> withOld = {{L"{phones}", ""}, {L"{old}", "OLD"}};
+    std::map<ERole, std::wstring> old = {{eConsole, L"{old}"}};
+    other.decide(eRender, withOld, phones, 0);
+    expect(other.decide(eRender, withOld, old, 1).empty(), "a device of Wolfe's that is not new is left as default");
+    withOld[L"{new2}"] = "NEW2";
+    std::map<ERole, std::wstring> late = {{eConsole, L"{new2}"}};
+    other.decide(eRender, withOld, {{eConsole, L"{phones}"}}, 10);
+    expect(other.decide(eRender, withOld, late, 80).empty(), "after its first minute a new device is left alone");
 }
 
 }  // namespace
@@ -480,6 +696,12 @@ int main() {
     testApplications();
     testLoops();
     testOldFile();
+    testLinkMuting();
+    testSilence();
+    testSelector();
+    testImportExport();
+    testExample();
+    testDefaultKeeper();
     printf(g_failures ? "\n%d check(s) FAILED\n" : "\nall checks passed\n", g_failures);
     return g_failures ? 1 : 0;
 }

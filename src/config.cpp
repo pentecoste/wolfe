@@ -67,6 +67,7 @@ GraphDescription loadDescription(const std::string& path) {
         }
         node.label = optionalString(item, "label");
         if (item.contains("muted") && item["muted"].is_boolean()) node.muted = item["muted"].get<bool>();
+        node.selected = optionalString(item, "selected");
         if (const EffectType* effect = findEffectType(node.type)) {
             for (const EffectParameter& parameter : effect->parameters) {
                 if (item.contains(parameter.key) && item[parameter.key].is_number()) {
@@ -87,6 +88,7 @@ GraphDescription loadDescription(const std::string& path) {
         link.from = requireString(item, "from", "link");
         link.to = requireString(item, "to", "link");
         if (item.contains("gain_db") && item["gain_db"].is_number()) link.gainDb = item["gain_db"].get<double>();
+        if (item.contains("muted") && item["muted"].is_boolean()) link.muted = item["muted"].get<bool>();
         description.links.push_back(link);
     }
 
@@ -113,6 +115,7 @@ void saveDescription(const std::string& path, const GraphDescription& descriptio
         for (const auto& [key, value] : node.parameters) item[key] = std::round(value * 1000.0) / 1000.0;
         if (!node.label.empty()) item["label"] = node.label;
         if (node.muted) item["muted"] = true;
+        if (!node.selected.empty()) item["selected"] = node.selected;
         if (node.hasPosition) {
             item["x"] = std::round(node.x);
             item["y"] = std::round(node.y);
@@ -127,6 +130,7 @@ void saveDescription(const std::string& path, const GraphDescription& descriptio
         item["from"] = link.from;
         item["to"] = link.to;
         if (link.gainDb != 0.0) item["gain_db"] = std::round(link.gainDb * 10.0) / 10.0;
+        if (link.muted) item["muted"] = true;
         links.push_back(item);
     }
     root["links"] = links;
@@ -168,6 +172,13 @@ void addNode(const NodeDescription& node, Graph& graph) {
     if (node.muted) graph.setMuted(node.id, true);
 }
 
+std::string selectedInput(const std::string& named, const std::vector<std::string>& inputs) {
+    for (const std::string& input : inputs) {
+        if (input == named) return input;
+    }
+    return inputs.empty() ? std::string() : inputs.front();
+}
+
 void buildGraph(const GraphDescription& description, Graph& graph) {
     graph.setMarginMs(description.marginMs);
 
@@ -179,8 +190,20 @@ void buildGraph(const GraphDescription& description, Graph& graph) {
     for (const NodeDescription& node : description.nodes) {
         if (linked.count(node.id) || isVirtualType(node.type)) addNode(node, graph);
     }
+    // A selector lets one link through; the others carry silence.
+    std::map<std::string, std::string> chosen;
+    for (const NodeDescription& node : description.nodes) {
+        if (node.type != "select") continue;
+        std::vector<std::string> inputs;
+        for (const LinkDescription& link : description.links) {
+            if (link.to == node.id) inputs.push_back(link.from);
+        }
+        chosen[node.id] = selectedInput(node.selected, inputs);
+    }
     for (const LinkDescription& link : description.links) {
-        graph.addLink(link.from, link.to, (float)std::pow(10.0, link.gainDb / 20.0));
+        auto selector = chosen.find(link.to);
+        const bool silent = link.muted || (selector != chosen.end() && selector->second != link.from);
+        graph.addLink(link.from, link.to, silent ? 0.0f : (float)std::pow(10.0, link.gainDb / 20.0));
     }
 }
 

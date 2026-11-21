@@ -299,6 +299,8 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE, LPSTR, int) {
         Editor editor(controller, scale);
         const std::string problems = controller.load();
         if (!problems.empty()) logLine("in %s:\n%s", document.c_str(), problems.c_str());
+        // An empty canvas: someone new, most likely.
+        if (!g_selfTesting && controller.nodes().empty()) editor.showWelcome();
 
         std::unique_ptr<SelfTest> selfTest;
         if (g_selfTesting) {
@@ -350,6 +352,36 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE, LPSTR, int) {
             if (editor.exitRequested) {
                 editor.exitRequested = false;
                 if (userConfirmsExit(window)) DestroyWindow(window);
+            }
+            // Windows' file windows run here, between frames.
+            if (editor.fileRequest == Editor::FileRequest::Export) {
+                editor.fileRequest = Editor::FileRequest::None;
+                const std::string path = chooseGraphFile(window, true);
+                const std::string problem = path.empty() ? std::string() : controller.exportTo(path);
+                if (!problem.empty()) {
+                    MessageBoxW(window, toWide("The graph could not be exported:\n\n" + problem).c_str(), L"Wolfe", MB_OK | MB_ICONWARNING);
+                }
+            } else if (editor.fileRequest == Editor::FileRequest::Import) {
+                editor.fileRequest = Editor::FileRequest::None;
+                bool hasWolfeDevices = false;
+                for (const Node& node : controller.nodes()) hasWolfeDevices |= node.isWolfeDevice();
+                const wchar_t* warning =
+                    hasWolfeDevices ? L"Importing replaces everything on the canvas. Wolfe's devices that are not in "
+                                      L"the file disappear from Windows.\n\nGo on?"
+                                    : L"Importing replaces everything on the canvas.\n\nGo on?";
+                const bool goOn = controller.nodes().empty() ||
+                                  MessageBoxW(window, warning, L"Wolfe", MB_OKCANCEL | MB_ICONQUESTION | MB_DEFBUTTON2) == IDOK;
+                const std::string path = goOn ? chooseGraphFile(window, false) : std::string();
+                if (!path.empty()) {
+                    bool imported = false;
+                    const std::string problems = controller.importFrom(path, &imported);
+                    if (imported) editor.showAll();
+                    if (!problems.empty()) {
+                        const std::string text = imported ? "The graph was imported, except for this:\n\n" + problems
+                                                          : "The graph could not be imported:\n\n" + problems;
+                        MessageBoxW(window, toWide(text).c_str(), L"Wolfe", MB_OK | (imported ? MB_ICONINFORMATION : MB_ICONWARNING));
+                    }
+                }
             }
         }
         g_controller = nullptr;
