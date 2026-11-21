@@ -1,1 +1,9 @@
 build/
+dist/
+installer/cache/
+# Wolfe installed into the repository folder itself (see installer/)
+/wolfe.exe
+/wolfe-cli.exe
+/unins000.exe
+/unins000.dat
+/THIRD-PARTY-NOTICES.txt

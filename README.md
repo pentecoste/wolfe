@@ -14,6 +14,27 @@ There are two programs on the same engine: `wolfe.exe`, a window with the
 patch canvas that keeps running in the notification area, and `wolfe-cli.exe`,
 which runs a graph described in a JSON file from a console.
 
+## Install
+
+Download `Wolfe-Setup-<version>.exe` from the release and run it. It asks
+for an administrator once, installs Wolfe, and installs
+[usbip-win2](https://github.com/vadimgrn/usbip-win2) too when it is missing
+or older than the copy it carries (its own, unmodified installer, run
+silently: only the client and its drivers). While usbip-win2's driver goes
+in, Windows restarts the USB controllers, so USB devices stop for a moment.
+
+- "Start Wolfe with Windows" is offered, and ticked: Wolfe's devices exist
+  only while it runs. The same setting is in Wolfe's own menu.
+- Running setup again updates Wolfe; a running Wolfe is asked to exit first.
+- The folder chosen must be empty or new (or an earlier Wolfe's): setup
+  would replace what is there, and uninstalling would delete it.
+- Uninstalling (Installed apps) removes Wolfe and its "start with Windows"
+  entry. Your graph and settings in `%APPDATA%\Wolfe` stay, and so does
+  usbip-win2, which has its own entry in Installed apps.
+
+The program is not signed: Windows SmartScreen may warn about it the first
+time ("More info", then "Run anyway").
+
 ## What it needs
 
 - [usbip-win2](https://github.com/vadimgrn/usbip-win2), for Wolfe's own
@@ -37,6 +58,13 @@ This produces, in `build/`:
 - `wolfe-cli.exe`: the same engine from a console
 - `wolfe-enginetest.exe`, `wolfe-controllertest.exe`: checks that need no audio device
 - `wolfe-sigtool.exe`: plays test signals and records devices, for measuring
+- `wolfe-makeicon.exe`: writes the program's icon to `res/wolfe.ico`
+
+The installer is built by `installer\build.ps1` (needs Inno Setup 6 as well:
+`winget install JRSoftware.InnoSetup`). It builds the program in Release into
+`build\release`, downloads usbip-win2's installer into `installer\cache` and
+checks it against its published SHA-256, and writes
+`dist\Wolfe-Setup-<version>.exe`. The version is the one in `CMakeLists.txt`.
 
 ## The window
 

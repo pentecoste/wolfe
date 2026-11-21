@@ -2,7 +2,9 @@
 
 #include <windows.h>
 
+#include <cstdint>
 #include <string>
+#include <vector>
 
 namespace wolfe {
 
@@ -15,7 +17,9 @@ std::string logFilePath();
 bool startsWithWindows();
 void setStartsWithWindows(bool enabled);
 
-// The program's icon, drawn in code at the size asked for.
+// The program's icon, drawn in code at the size asked for: as an icon, or as
+// rows of pixels from the top, 0xAARRGGBB (alpha not premultiplied).
 HICON makeIcon(int size);
+std::vector<uint32_t> iconPixels(int size);
 
 }  // namespace wolfe

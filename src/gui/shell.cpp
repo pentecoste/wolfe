@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <vector>
 
@@ -61,24 +62,8 @@ void setStartsWithWindows(bool enabled) {
 }
 
 // A dark rounded square with a zigzag of connected dots: a "W" made of a patch.
-HICON makeIcon(int size) {
-    BITMAPV5HEADER header = {};
-    header.bV5Size = sizeof(header);
-    header.bV5Width = size;
-    header.bV5Height = -size;  // top row first
-    header.bV5Planes = 1;
-    header.bV5BitCount = 32;
-    header.bV5Compression = BI_BITFIELDS;
-    header.bV5RedMask = 0x00FF0000;
-    header.bV5GreenMask = 0x0000FF00;
-    header.bV5BlueMask = 0x000000FF;
-    header.bV5AlphaMask = 0xFF000000;
-
-    void* bits = nullptr;
-    HDC screen = GetDC(nullptr);
-    HBITMAP color = CreateDIBSection(screen, (BITMAPINFO*)&header, DIB_RGB_COLORS, &bits, nullptr, 0);
-    ReleaseDC(nullptr, screen);
-    if (!color) return nullptr;
+std::vector<uint32_t> iconPixels(int size) {
+    std::vector<uint32_t> pixels((size_t)size * size);
 
     struct Point {
         float x, y;
@@ -93,7 +78,6 @@ HICON makeIcon(int size) {
         return std::hypot(px - (a.x + t * dx), py - (a.y + t * dy));
     };
 
-    uint32_t* pixels = (uint32_t*)bits;
     for (int row = 0; row < size; row++) {
         for (int column = 0; column < size; column++) {
             const float x = (column + 0.5f) / size, y = (row + 0.5f) / size;
@@ -122,6 +106,29 @@ HICON makeIcon(int size) {
                                           ((uint32_t)green << 8) | (uint32_t)blue;
         }
     }
+    return pixels;
+}
+
+HICON makeIcon(int size) {
+    BITMAPV5HEADER header = {};
+    header.bV5Size = sizeof(header);
+    header.bV5Width = size;
+    header.bV5Height = -size;  // top row first
+    header.bV5Planes = 1;
+    header.bV5BitCount = 32;
+    header.bV5Compression = BI_BITFIELDS;
+    header.bV5RedMask = 0x00FF0000;
+    header.bV5GreenMask = 0x0000FF00;
+    header.bV5BlueMask = 0x000000FF;
+    header.bV5AlphaMask = 0xFF000000;
+
+    void* bits = nullptr;
+    HDC screen = GetDC(nullptr);
+    HBITMAP color = CreateDIBSection(screen, (BITMAPINFO*)&header, DIB_RGB_COLORS, &bits, nullptr, 0);
+    ReleaseDC(nullptr, screen);
+    if (!color) return nullptr;
+    const std::vector<uint32_t> pixels = iconPixels(size);
+    memcpy(bits, pixels.data(), pixels.size() * sizeof(uint32_t));
 
     HBITMAP mask = CreateBitmap(size, size, 1, 1, nullptr);
     ICONINFO info = {};

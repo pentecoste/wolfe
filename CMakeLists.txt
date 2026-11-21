@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(Wolfe VERSION 0.2.0 LANGUAGES C CXX)
+project(Wolfe VERSION 0.2.0 LANGUAGES C CXX RC)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -60,12 +60,16 @@ add_library(wolfe_app STATIC src/app/controller.cpp)
 target_compile_options(wolfe_app PRIVATE -Wall -Wextra)
 target_link_libraries(wolfe_app PUBLIC wolfe_engine)
 
+# The executables' icon and version (res/wolfe.ico is made by wolfe-makeicon).
+configure_file(res/wolfe.rc.in ${CMAKE_BINARY_DIR}/wolfe.rc @ONLY)
+
 # The program: the patch canvas in a window, with an icon in the notification area.
 add_executable(wolfe WIN32
     src/gui/main.cpp
     src/gui/editor.cpp
     src/gui/selftest.cpp
-    src/gui/shell.cpp)
+    src/gui/shell.cpp
+    ${CMAKE_BINARY_DIR}/wolfe.rc)
 target_compile_options(wolfe PRIVATE -Wall -Wextra)
 # Windows' own constants (cursors and the like) in their wide-character form.
 target_compile_definitions(wolfe PRIVATE UNICODE _UNICODE)
@@ -74,7 +78,7 @@ target_link_libraries(wolfe PRIVATE wolfe_app imgui shell32)
 target_link_options(wolfe PRIVATE -static)
 
 # The same engine from a console, running a graph file.
-add_executable(wolfe-cli src/cli/main.cpp)
+add_executable(wolfe-cli src/cli/main.cpp ${CMAKE_BINARY_DIR}/wolfe.rc)
 target_compile_options(wolfe-cli PRIVATE -Wall -Wextra)
 target_link_libraries(wolfe-cli PRIVATE wolfe_engine shell32)
 target_link_options(wolfe-cli PRIVATE -static)
@@ -88,6 +92,13 @@ target_link_libraries(wolfe-sigtool PRIVATE wolfe_engine)
 target_link_options(wolfe-sigtool PRIVATE -static)
 
 # Prototype: a USB audio device served over USB/IP, for usbip-win2 to attach.
+# Writes the program's icon to res/wolfe.ico.
+add_executable(wolfe-makeicon tools/makeicon.cpp src/gui/shell.cpp)
+target_include_directories(wolfe-makeicon PRIVATE src)
+target_compile_definitions(wolfe-makeicon PRIVATE UNICODE _UNICODE)
+target_link_libraries(wolfe-makeicon PRIVATE wolfe_engine shell32 gdi32)
+target_link_options(wolfe-makeicon PRIVATE -static)
+
 add_executable(wolfe-uacproto tools/uacproto.cpp)
 target_compile_options(wolfe-uacproto PRIVATE -Wall -Wextra)
 target_link_libraries(wolfe-uacproto PRIVATE ws2_32 avrt winmm)
