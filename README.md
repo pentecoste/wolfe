@@ -27,7 +27,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/images/canvas.png" alt="Wolfe's canvas: a microphone through noise suppression, a high-pass filter and a compressor; an equalizer feeding a reverb and a gain, mixed into a limiter and on to the headphones">
+  <img src="docs/images/canvas.png" alt="Wolfe's canvas: a microphone through noise suppression into a limiter and the headphones, with a reverb sent alongside and mixed back in, 12 dB lower">
 </p>
 
 What qpwgraph or Carla give you on Linux, built on what Windows offers.
