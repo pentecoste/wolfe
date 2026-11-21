@@ -34,6 +34,7 @@ AppName=Wolfe
 AppVersion={#AppVersion}
 AppVerName=Wolfe {#AppVersion}
 AppPublisher=Wolfe
+AppCopyright=Copyright (C) 2026 The Wolfe authors. GNU GPL 3.0 or later.
 AppPublisherURL=https://github.com/pentecoste/wolfe
 AppSupportURL=https://github.com/pentecoste/wolfe/issues
 VersionInfoVersion={#AppVersion}
@@ -70,6 +71,7 @@ Name: desktopicon; Description: "{cm:CreateDesktopIcon}"; Flags: unchecked
 Source: "{#BuildDir}\wolfe.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\wolfe-cli.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
 Source: "THIRD-PARTY-NOTICES.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "cache\{#UsbipSetup}"; DestDir: "{tmp}"; Flags: deleteafterinstall nocompression; Check: UsbipNeeded
 

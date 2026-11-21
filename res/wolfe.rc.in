@@ -20,6 +20,7 @@ BEGIN
             VALUE "CompanyName", "Wolfe"
             VALUE "FileDescription", "Wolfe"
             VALUE "FileVersion", "@PROJECT_VERSION@"
+            VALUE "LegalCopyright", "Copyright (C) 2026 The Wolfe authors. GNU GPL 3.0 or later."
             VALUE "ProductName", "Wolfe"
             VALUE "ProductVersion", "@PROJECT_VERSION@"
         END
