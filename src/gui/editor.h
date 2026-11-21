@@ -3,6 +3,7 @@
 #include "app/controller.h"
 
 #include "imgui.h"
+#include "imnodes.h"
 
 #include <set>
 #include <string>
@@ -47,11 +48,27 @@ private:
     void placeNew(int uid, ImVec2 screenPosition);
     // Says why something the user just did was refused, next to the mouse, for a few seconds.
     void flash(const std::string& message);
+    // Zoom: steps of 10%, 0 being the actual size.
+    void zoomBy(int steps, ImVec2 pivot);
+    void zoomTo(int step, ImVec2 pivot);
+    void applyZoom();
+    float view() const { return scale_ * zoom_; }  // canvas pixels per unit of a saved position
     static int searchKeys(ImGuiInputTextCallbackData* data);
 
     Controller& controller_;
     float scale_;
     double now_ = 0;
+
+    // The canvas is drawn at `zoom_` times its size: fonts, boxes, spacing
+    // and positions alike, so that text stays sharp. A change is asked for
+    // (wheel, keys, menu) and made at the start of the next canvas.
+    float zoom_ = 1.0f;
+    int zoomStep_ = 0;
+    int zoomWanted_ = 0;
+    float wheel_ = 0.0f;   // wheel turned and not yet made into steps (a touchpad turns it a little at a time)
+    ImVec2 zoomPivot_;     // the point of the screen that stays put
+    ImVec2 gridOrigin_;    // where the canvas started on the screen, last frame
+    ImNodesStyle style_;   // the canvas' style at the actual size
 
     std::set<int> placed_;  // nodes the canvas has already been told the position of
     ImVec2 canvasCentre_;

@@ -5,6 +5,7 @@
 #include "imnodes.h"
 #include "imnodes_internal.h"
 
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
@@ -199,6 +200,49 @@ SelfTest::SelfTest(Controller& controller, std::string reportPath)
     tapKey(ImGuiKey_Escape);
     check("Escape closes that without making anything",
           [nodes, countNodes] { return !anyMenuOpen() && countNodes() == *nodes; });
+
+    // Zoom: the wheel over a box makes everything bigger around the mouse;
+    // Ctrl+0 brings back the actual size. Saved positions do not change.
+    struct Before {
+        ImVec2 corner, size, mouse;
+        float x = 0, y = 0;
+    };
+    auto before = std::make_shared<Before>();
+    const Place onSecondTitle = [this] {
+        const ImVec2 corner = ImNodes::GetNodeScreenSpacePos(second_);
+        return ImVec2(corner.x + ImNodes::GetNodeDimensions(second_).x * 0.4f, corner.y + 8.0f);
+    };
+    moveTo(onSecondTitle);
+    run([this, before, onSecondTitle] {
+        before->corner = ImNodes::GetNodeScreenSpacePos(second_);
+        before->size = ImNodes::GetNodeDimensions(second_);
+        before->mouse = onSecondTitle();
+        before->x = controller_.node(second_)->x;
+        before->y = controller_.node(second_)->y;
+        ImGui::GetIO().AddMouseWheelEvent(0.0f, 3.0f);
+    });
+    wait(5);
+    check("turning the wheel up over the canvas makes the boxes bigger", [this, before] {
+        const float grown = ImNodes::GetNodeDimensions(second_).x / before->size.x;
+        return grown > 1.30f && grown < 1.36f;  // three steps of 10%
+    });
+    check("around the point under the mouse", [this, before] {
+        const ImVec2 corner = ImNodes::GetNodeScreenSpacePos(second_);
+        const float ratio = std::pow(1.1f, 3.0f);
+        const ImVec2 expected(before->mouse.x - (before->mouse.x - before->corner.x) * ratio,
+                              before->mouse.y - (before->mouse.y - before->corner.y) * ratio);
+        return std::fabs(corner.x - expected.x) < 2.0f && std::fabs(corner.y - expected.y) < 2.0f;
+    });
+    check("without changing where the box is saved", [this, before] {
+        const Node* node = controller_.node(second_);
+        return std::fabs(node->x - before->x) < 0.01f && std::fabs(node->y - before->y) < 0.01f;
+    });
+    ctrlKey(ImGuiKey_0);
+    check("Ctrl+0 goes back to the actual size, where it was", [this, before] {
+        const ImVec2 corner = ImNodes::GetNodeScreenSpacePos(second_), size = ImNodes::GetNodeDimensions(second_);
+        return std::fabs(size.x - before->size.x) < 1.0f && std::fabs(size.y - before->size.y) < 1.0f &&
+               std::fabs(corner.x - before->corner.x) < 2.0f && std::fabs(corner.y - before->corner.y) < 2.0f;
+    });
 
     run([this, countGains] {
         controller_.removeNode(second_);

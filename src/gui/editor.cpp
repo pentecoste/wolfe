@@ -157,6 +157,57 @@ Editor::Editor(Controller& controller, float scale) : controller_(controller), s
     // modifier held". Here the modifier is not a key but a decision made
     // every frame: see drawCanvas().
     ImNodes::GetIO().LinkDetachWithModifierClick.Modifier = &grabLinks_;
+    style_ = style;
+}
+
+// ---------------------------------------------------------------------------
+// Zoom
+// ---------------------------------------------------------------------------
+
+const int kZoomOut = -10, kZoomIn = 8;  // 1.1^-10 = 39%, 1.1^8 = 214%
+
+void Editor::zoomBy(int steps, ImVec2 pivot) { zoomTo(zoomWanted_ + steps, pivot); }
+
+void Editor::zoomTo(int step, ImVec2 pivot) {
+    zoomWanted_ = std::max(kZoomOut, std::min(kZoomIn, step));
+    zoomPivot_ = pivot;
+}
+
+// imnodes knows nothing of zoom: the canvas is laid out again at the new
+// size, the boxes put where they now belong and the view moved so that the
+// point under the mouse stays under it. Called before the canvas begins.
+void Editor::applyZoom() {
+    // (Not in the middle of a drag: the canvas holds on to where it started.)
+    if (zoomWanted_ != zoomStep_ && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+        const float zoom = std::pow(1.1f, (float)zoomWanted_);
+        const float ratio = zoom / zoom_;
+        const ImVec2 panning = ImNodes::EditorContextGetPanning();
+        const ImVec2 under(zoomPivot_.x - gridOrigin_.x - panning.x, zoomPivot_.y - gridOrigin_.y - panning.y);
+        ImNodes::EditorContextResetPanning(
+            ImVec2(zoomPivot_.x - gridOrigin_.x - under.x * ratio, zoomPivot_.y - gridOrigin_.y - under.y * ratio));
+        zoom_ = zoom;
+        zoomStep_ = zoomWanted_;
+        for (const Node& node : controller_.nodes()) {
+            if (placed_.count(node.uid)) ImNodes::SetNodeGridSpacePos(node.uid, ImVec2(node.x * view(), node.y * view()));
+        }
+    }
+
+    ImNodesStyle style = style_;
+    const float z = zoom_;
+    const float reach = std::max(z, 0.6f);  // what the mouse has to come near stays easy to hit
+    style.GridSpacing *= z;
+    style.NodeCornerRounding *= z;
+    style.NodePadding = ImVec2(style_.NodePadding.x * z, style_.NodePadding.y * z);
+    style.NodeBorderThickness *= std::max(z, 0.5f);
+    style.LinkThickness *= std::max(z, 0.5f);
+    style.LinkHoverDistance *= reach;
+    style.PinCircleRadius *= z;
+    style.PinQuadSideLength *= z;
+    style.PinTriangleSideLength *= z;
+    style.PinLineThickness *= std::max(z, 0.5f);
+    style.PinHoverRadius *= reach;
+    style.PinOffset *= z;
+    ImNodes::GetStyle() = style;
 }
 
 void Editor::flash(const std::string& message) {
@@ -188,6 +239,25 @@ void Editor::draw(double now) {
     if (!io.WantTextInput && !anyPopupOpen() && ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_A)) {
         openSearch(overCanvas_ ? io.MousePos : canvasCentre_);
     }
+    // Zoom: the wheel over the canvas, or Ctrl and + - 0.
+    if (!anyPopupOpen()) {
+        const ImVec2 pivot = overCanvas_ ? io.MousePos : canvasCentre_;
+        // (Shift is allowed: on some keyboards + is Shift and =.)
+        const auto ctrlAnd = [&io](ImGuiKey key, bool repeat) {
+            return io.KeyCtrl && !io.KeyAlt && ImGui::IsKeyPressed(key, repeat);
+        };
+        if (!io.WantTextInput) {
+            if (ctrlAnd(ImGuiKey_Equal, true) || ctrlAnd(ImGuiKey_KeypadAdd, true)) zoomBy(1, pivot);
+            if (ctrlAnd(ImGuiKey_Minus, true) || ctrlAnd(ImGuiKey_KeypadSubtract, true)) zoomBy(-1, pivot);
+            if (ctrlAnd(ImGuiKey_0, false) || ctrlAnd(ImGuiKey_Keypad0, false)) zoomTo(0, pivot);
+        }
+        if (overCanvas_ && io.MouseWheel != 0.0f && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+            wheel_ += io.MouseWheel;
+            const int steps = (int)wheel_;  // whole notches; the rest waits for more
+            wheel_ -= (float)steps;
+            if (steps) zoomBy(steps, pivot);
+        }
+    }
     drawCanvas();
     drawMenus();
     drawSearch();
@@ -214,6 +284,14 @@ void Editor::drawMenuBar() {
     }
     if (ImGui::BeginMenu("Add")) {
         addItems(canvasCentre_);
+        ImGui::EndMenu();
+    }
+    if (ImGui::BeginMenu("View")) {
+        ImGui::TextDisabled("Zoom %d%%", (int)std::lround(zoom_ * 100.0f));
+        ImGui::Separator();
+        if (ImGui::MenuItem("Zoom in", "Ctrl++", false, zoomWanted_ < kZoomIn)) zoomBy(1, canvasCentre_);
+        if (ImGui::MenuItem("Zoom out", "Ctrl+-", false, zoomWanted_ > kZoomOut)) zoomBy(-1, canvasCentre_);
+        if (ImGui::MenuItem("Actual size", "Ctrl+0", false, zoomWanted_ != 0)) zoomTo(0, canvasCentre_);
         ImGui::EndMenu();
     }
     ImGui::EndMenuBar();
@@ -388,10 +466,10 @@ void Editor::placeNew(int uid, ImVec2 screenPosition) {
         for (const Node& other : controller_.nodes()) {
             if (other.uid == uid || !placed_.count(other.uid)) continue;
             const ImVec2 there = ImNodes::GetNodeGridSpacePos(other.uid);
-            covered |= std::fabs(there.x - position.x) < kNodeWidth * scale_ && std::fabs(there.y - position.y) < 70.0f * scale_;
+            covered |= std::fabs(there.x - position.x) < kNodeWidth * view() && std::fabs(there.y - position.y) < 70.0f * view();
         }
         if (!covered) break;
-        position.y += 90.0f * scale_;
+        position.y += 90.0f * view();
     }
     ImNodes::SetNodeGridSpacePos(uid, position);
     placed_.insert(uid);
@@ -490,7 +568,7 @@ void Editor::drawFlash() {
 // ---------------------------------------------------------------------------
 
 void Editor::drawNode(const Node& node) {
-    const float width = kNodeWidth * scale_;
+    const float width = kNodeWidth * view();
     const bool trouble = node.active && !node.healthy;
 
     ImNodes::PushColorStyle(ImNodesCol_TitleBar, titleColour(node, 0.0f));
@@ -620,7 +698,7 @@ void Editor::drawNode(const Node& node) {
             ImGui::PopTextWrapPos();
             ImNodes::EndOutputAttribute();
         }
-        drawMeter(node.level, width, 5.0f * scale_, node.present);
+        drawMeter(node.level, width, 5.0f * view(), node.present);
     }
 
     ImNodes::EndNode();
@@ -637,10 +715,19 @@ void Editor::drawCanvas() {
     // ends at is, so over a pin taking hold is switched off; Ctrl forces it.)
     grabLinks_ = ImGui::GetIO().KeyCtrl || !overPin_;
 
+    applyZoom();
     ImNodes::BeginNodeEditor();
+    gridOrigin_ = ImGui::GetCursorScreenPos();
+    // Inside the boxes, text and spacing at the zoom's size.
+    const ImGuiStyle& look = ImGui::GetStyle();
+    ImGui::PushFont(nullptr, look.FontSizeBase * zoom_);
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(look.ItemSpacing.x * zoom_, look.ItemSpacing.y * zoom_));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemInnerSpacing, ImVec2(look.ItemInnerSpacing.x * zoom_, look.ItemInnerSpacing.y * zoom_));
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(look.FramePadding.x * zoom_, look.FramePadding.y * zoom_));
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, look.FrameRounding * zoom_);
     for (const Node& node : controller_.nodes()) {
         if (!placed_.count(node.uid) && node.hasPosition) {
-            ImNodes::SetNodeGridSpacePos(node.uid, ImVec2(node.x * scale_, node.y * scale_));
+            ImNodes::SetNodeGridSpacePos(node.uid, ImVec2(node.x * view(), node.y * view()));
             placed_.insert(node.uid);
         }
         drawNode(node);
@@ -656,9 +743,12 @@ void Editor::drawCanvas() {
         ImNodes::Link(link.uid, outputPin(link.from), inputPin(link.to));
         if (silent) ImNodes::PopColorStyle();
     }
+    ImGui::PopStyleVar(4);
+    ImGui::PopFont();
     ImNodes::MiniMap(0.15f, ImNodesMiniMapLocation_BottomRight);
     ImNodes::EndNodeEditor();
-    overCanvas_ = ImNodes::IsEditorHovered();
+    // (imnodes' IsEditorHovered() asks this window, not the canvas' own one inside it.)
+    overCanvas_ = ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows);
     int pinUnderMouse = 0;
     overPin_ = ImNodes::IsPinHovered(&pinUnderMouse);
 
@@ -733,7 +823,7 @@ void Editor::drawCanvas() {
     for (const Node& node : controller_.nodes()) {
         if (!placed_.count(node.uid)) continue;
         const ImVec2 position = ImNodes::GetNodeGridSpacePos(node.uid);
-        controller_.moveNode(node.uid, position.x / scale_, position.y / scale_);
+        controller_.moveNode(node.uid, position.x / view(), position.y / view());
     }
 
     // Tooltips and right-click menus.
