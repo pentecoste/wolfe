@@ -147,16 +147,16 @@ SelfTest::SelfTest(Controller& controller, std::string reportPath)
         return node->x == where->x && node->y == where->y;
     });
 
-    // The mute switch, at the right of the title.
+    // The mute switch, a loudspeaker at the right of the title.
     const Place onMute = [this] {
         const ImVec2 corner = ImNodes::GetNodeScreenSpacePos(second_);
         const ImVec2 size = ImNodes::GetNodeDimensions(second_);
         const ImVec2 padding = ImNodes::GetStyle().NodePadding;
-        const float button = ImGui::CalcTextSize("M").x + ImGui::GetStyle().FramePadding.x * 2.0f;
+        const float button = ImGui::GetFontSize();
         return ImVec2(corner.x + size.x - padding.x - button * 0.5f, corner.y + padding.y + ImGui::GetFontSize() * 0.5f);
     };
     click(onMute);
-    check("clicking M mutes the box", [this, where] {
+    check("clicking the loudspeaker mutes the box", [this, where] {
         const Node* node = controller_.node(second_);
         return node->muted && node->x == where->x && node->y == where->y;
     });

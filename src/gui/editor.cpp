@@ -90,6 +90,32 @@ std::string namesThatFit(const std::vector<std::string>& names, float width) {
     return fit(names[0], width - ImGui::CalcTextSize(more.c_str()).x) + more;
 }
 
+// A loudspeaker in a square of `size` at `at`: with sound waves while it
+// plays, red and crossed out while muted.
+void drawSpeakerIcon(ImVec2 at, float size, bool muted, bool hovered) {
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    const ImU32 colour = muted ? IM_COL32(255, 105, 105, 255) : IM_COL32(255, 255, 255, hovered ? 255 : 170);
+    // Muted, it sits on a dark patch, so that the red reads on any title colour.
+    if (muted || hovered) {
+        draw->AddRectFilled(ImVec2(at.x - size * 0.1f, at.y - size * 0.05f), ImVec2(at.x + size * 1.1f, at.y + size * 1.05f),
+                            muted ? IM_COL32(30, 12, 14, hovered ? 255 : 220) : IM_COL32(0, 0, 0, 60), size * 0.25f);
+    }
+    auto point = [&](float x, float y) { return ImVec2(at.x + x * size, at.y + y * size); };
+    draw->AddRectFilled(point(0.10f, 0.37f), point(0.30f, 0.63f), colour);
+    const ImVec2 cone[4] = {point(0.29f, 0.37f), point(0.52f, 0.16f), point(0.52f, 0.84f), point(0.29f, 0.63f)};
+    draw->AddConvexPolyFilled(cone, 4, colour);
+    const float thickness = std::max(1.0f, size * 0.08f);
+    if (muted) {
+        draw->AddLine(point(0.64f, 0.36f), point(0.92f, 0.64f), colour, thickness);
+        draw->AddLine(point(0.64f, 0.64f), point(0.92f, 0.36f), colour, thickness);
+    } else {
+        for (float radius : {0.16f, 0.32f}) {
+            draw->PathArcTo(point(0.56f, 0.5f), radius * size, -0.85f, 0.85f, 12);
+            draw->PathStroke(colour, ImDrawFlags_None, thickness);
+        }
+    }
+}
+
 // Every word of the query is somewhere in the choice's words.
 bool matches(const std::string& words, const char* query) {
     std::istringstream parts(toLower(query));
@@ -479,18 +505,14 @@ void Editor::drawNode(const Node& node) {
     // The title, and at its right the mute switch: red while muted.
     ImNodes::BeginNodeTitleBar();
     const float titleX = ImGui::GetCursorPosX();
-    const float muteWidth = ImGui::CalcTextSize("M").x + ImGui::GetStyle().FramePadding.x * 2.0f;
+    const float muteWidth = ImGui::GetFontSize();
     ImGui::TextUnformatted(fit(title, width - muteWidth - ImGui::GetStyle().ItemSpacing.x).c_str());
     // (SameLine with a position would count it from elsewhere inside the node's group.)
     ImGui::SameLine();
     ImGui::SetCursorPosX(titleX + width - muteWidth);
     ImGui::PushID(node.uid);
-    ImGui::PushStyleColor(ImGuiCol_Button, node.muted ? ImVec4(0.80f, 0.22f, 0.22f, 1.0f) : ImVec4(0, 0, 0, 0.18f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, node.muted ? ImVec4(0.90f, 0.32f, 0.32f, 1.0f) : ImVec4(0, 0, 0, 0.35f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.95f, 0.40f, 0.40f, 1.0f));
-    ImGui::PushStyleColor(ImGuiCol_Text, node.muted ? ImVec4(1, 1, 1, 1) : ImVec4(1, 1, 1, 0.55f));
-    if (ImGui::SmallButton("M##mute")) controller_.setMuted(node.uid, !node.muted);
-    ImGui::PopStyleColor(4);
+    if (ImGui::InvisibleButton("##mute", ImVec2(muteWidth, muteWidth))) controller_.setMuted(node.uid, !node.muted);
+    drawSpeakerIcon(ImGui::GetItemRectMin(), muteWidth, node.muted, ImGui::IsItemHovered());
     ImGui::PopID();
     ImNodes::EndNodeTitleBar();
     if (!second.empty()) ImGui::TextUnformatted(fit(second, width).c_str());
