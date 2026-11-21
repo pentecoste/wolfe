@@ -4,6 +4,7 @@
 // never given to Windows. Names are made up for the same reason: a real one
 // would open the real device.
 #include "app/controller.h"
+#include "app_devices.h"
 
 #include <cmath>
 #include <cstdio>
@@ -168,6 +169,27 @@ void testGains() {
     }
     expect(gain && gain->x == 400 && gain->y == 100, "the gain is back where it was, with its value");
     expect(reloaded.links().size() == 3 && reloaded.nodes().size() == 4, "everything else is back too");
+}
+
+// Which applications Wolfe moves back to its devices when they come back.
+void testStrayStreams() {
+    printf("applications that lost Wolfe's device\n");
+    const std::set<std::wstring> wolfe = {L"{wolfe-music}", L"{wolfe-chat}"};
+    auto stray = [&](std::vector<AppStream> streams) { return strayStreams(streams, wolfe); };
+
+    std::vector<AppStream> found = stray({{10, L"{phones}", false, true, L"{wolfe-music}"}});
+    expect(found.size() == 1 && found[0].pid == 10 && found[0].chosen == L"{wolfe-music}",
+           "given Wolfe's speaker, playing on the headphones: moved back");
+    expect(stray({{10, L"{phones}", false, true, L""}}).empty(), "put back on the default device by the user: left alone");
+    expect(stray({{10, L"{phones}", false, true, L"{speakers}"}}).empty(), "given another device: left alone");
+    expect(stray({{10, L"{phones}", false, true, L"{wolfe-gone}"}}).empty(), "given a device of Wolfe's that is not there: left alone");
+    expect(stray({{10, L"{wolfe-music}", false, true, L"{wolfe-music}"}}).empty(), "already where it was put: left alone");
+    expect(stray({{10, L"{phones}", false, false, L"{wolfe-music}"}}).empty(), "a silent stream elsewhere: left alone");
+    expect(stray({{10, L"{wolfe-music}", false, true, L"{wolfe-music}"}, {10, L"{phones}", false, true, L"{wolfe-music}"}}).empty(),
+           "playing where it was put and also elsewhere, on purpose: left alone");
+    found = stray({{10, L"{phones}", false, true, L"{wolfe-music}"}, {10, L"{speakers}", false, true, L"{wolfe-music}"},
+                   {10, L"{mic}", true, true, L"{wolfe-chat}"}});
+    expect(found.size() == 2, "once per process and direction");
 }
 
 void testMuting() {
@@ -452,6 +474,7 @@ int main() {
     testGains();
     testEffects();
     testMuting();
+    testStrayStreams();
     testHandWrittenFile();
     testWolfeDevices();
     testApplications();

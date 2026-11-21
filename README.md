@@ -110,6 +110,25 @@ with the same name is a new device to Windows. Wolfe's devices exist while
 Wolfe runs, whether or not anything is linked to them; a device of the
 computer is only opened while something is linked to it.
 
+### When Wolfe is closed, and comes back
+
+While Wolfe is not running its devices are gone, and Windows plays the
+applications that were given them on the default device. Exiting is
+therefore asked first (Exit in the Wolfe menu or on the icon, or closing the
+window when Wolfe is not kept running).
+
+Windows keeps remembering which device each application was given, also
+while that device is missing; an application put back on the default device
+on purpose has no device of its own any more. So when Wolfe's devices come
+back (Wolfe starts again, or starts after the applications), Wolfe looks for
+applications that were given one of them but are playing elsewhere, and
+moves them back, within a couple of seconds, once each; those put on the
+default device on purpose stay where they are. The log says which were
+moved. This uses the interface Windows' own settings use, which is not
+documented: on Windows older than 10 21H2 it is not there, and those
+applications go back to Wolfe's devices only when they open their audio
+again (usually when they are restarted).
+
 ### What a box says
 
 `live` when Wolfe is using it, `not linked` when nothing is linked to it,
@@ -140,7 +159,8 @@ Exit is in that menu and on the icon. What the engine reports is written to
 
     wolfe.exe                    open the window
     wolfe.exe --tray             start hidden in the notification area
-    wolfe.exe --file <file>      keep the graph in that file instead
+    wolfe.exe --file <file>      keep the graph in that file instead (and the log
+                                 next to it, in <file>.log)
     wolfe.exe --selftest <file>  try the mouse and keyboard gestures by itself
                                  and write what happened to a file
 

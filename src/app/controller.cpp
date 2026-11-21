@@ -1,5 +1,6 @@
 #include "controller.h"
 
+#include "app_devices.h"
 #include "process_finder.h"
 #include "virtual_devices.h"
 
@@ -10,6 +11,7 @@
 #include <filesystem>
 #include <functional>
 #include <set>
+#include <tuple>
 
 namespace wolfe {
 
@@ -693,6 +695,13 @@ void Controller::watchMain() {
     double nextLook = 0.0;
     std::map<std::string, std::string> programNames;  // by executable path: reading one opens the file
 
+    // Bringing applications back to Wolfe's devices (see AppDevices).
+    AppDevices appDevices;
+    std::set<std::wstring> wolfePresent;                      // Wolfe's devices Windows had at the last look
+    std::set<std::tuple<DWORD, bool, std::wstring>> movedBack;  // tried once each until a device goes again
+    double arrived = -1e9;  // when one of Wolfe's devices last appeared
+    if (!appDevices.available()) logLine("applications cannot be brought back to Wolfe's devices on this Windows");
+
     std::unique_lock<std::mutex> lock(watchMutex_);
     while (!stopWatching_) {
         if (lookNow_ || nowSeconds() >= nextLook) {
@@ -705,18 +714,63 @@ void Controller::watchMain() {
             try {
                 discovery.inputs = listDevices(eCapture);
                 discovery.outputs = listDevices(eRender);
-                if (metering) {
-                    meters = deviceMeters();
-                    // Who uses which device, while somebody can see it. Wolfe's
-                    // own streams are left out: its links already say the same.
+
+                std::set<std::wstring> wolfeNow;
+                std::map<std::wstring, std::string> deviceNames;
+                for (const auto* list : {&discovery.inputs, &discovery.outputs}) {
+                    for (const DeviceInfo& device : *list) {
+                        deviceNames[device.id] = device.name;
+                        if (!device.wolfeSerial.empty()) wolfeNow.insert(device.id);
+                    }
+                }
+                for (const std::wstring& id : wolfePresent) {
+                    if (!wolfeNow.count(id)) movedBack.clear();  // gone: when it comes back, it is tried again
+                }
+                for (const std::wstring& id : wolfeNow) {
+                    if (!wolfePresent.count(id)) arrived = nowSeconds();
+                }
+                wolfePresent = wolfeNow;
+
+                // Who uses which device: shown while somebody can see it, and
+                // looked at whenever Wolfe's devices are there. Wolfe's own
+                // streams are left out: its links already say the same.
+                if (metering) meters = deviceMeters();
+                if (metering || !wolfeNow.empty()) {
                     ProcessSnapshot snapshot;
+                    std::vector<AppStream> streams;
                     for (const AudioSession& session : audioSessions()) {
                         if (session.pid == GetCurrentProcessId()) continue;
                         const std::string& path = snapshot.path(session.pid);
                         if (path.empty()) continue;  // a process of the system's
                         auto name = programNames.find(path);
                         if (name == programNames.end()) name = programNames.emplace(path, programName(path)).first;
-                        discovery.sessions.push_back({name->second, toUtf8(session.device), session.recording, session.active});
+                        if (metering) {
+                            discovery.sessions.push_back({name->second, toUtf8(session.device), session.recording, session.active});
+                        }
+                        streams.push_back({session.pid, session.device, session.recording, session.active, {}});
+                    }
+
+                    // Applications that were given one of Wolfe's devices but
+                    // play elsewhere, because it was missing when they started:
+                    // their own choice is applied again, which moves them back.
+                    if (appDevices.available() && !wolfeNow.empty()) {
+                        std::map<std::pair<DWORD, bool>, std::wstring> chosen;
+                        for (AppStream& stream : streams) {
+                            if (!stream.active) continue;
+                            const auto key = std::make_pair(stream.pid, stream.recording);
+                            auto found = chosen.find(key);
+                            if (found == chosen.end()) {
+                                found = chosen.emplace(key, appDevices.get(stream.pid, stream.recording ? eCapture : eRender)).first;
+                            }
+                            stream.chosen = found->second;
+                        }
+                        for (const AppStream& stray : strayStreams(streams, wolfeNow)) {
+                            if (!movedBack.insert({stray.pid, stray.recording, stray.chosen}).second) continue;
+                            const bool moved = appDevices.set(stray.pid, stray.recording ? eCapture : eRender, stray.chosen);
+                            logLine("%s (process %lu) %s from %s back to %s", programNames[snapshot.path(stray.pid)].c_str(),
+                                    stray.pid, moved ? "moved" : "could not be moved", deviceNames[stray.device].c_str(),
+                                    deviceNames[stray.chosen].c_str());
+                        }
                     }
                 }
             } catch (const std::exception& error) {
@@ -726,7 +780,10 @@ void Controller::watchMain() {
             lock.lock();
             pending_ = std::move(discovery);
             hasPending_ = true;
-            nextLook = nowSeconds() + (lookOften_ ? 1.5 : 6.0);
+            // Right after one of Wolfe's devices appears, applications find
+            // their way to it: look often for a while.
+            const bool justArrived = nowSeconds() - arrived < 15.0;
+            nextLook = nowSeconds() + (justArrived ? 1.0 : lookOften_ ? 1.5 : 6.0);
         }
 
         const auto wake = [this] { return stopWatching_ || lookNow_; };

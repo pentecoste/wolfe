@@ -112,6 +112,27 @@ void showWindow(HWND window) {
     SetForegroundWindow(window);
 }
 
+// Exiting takes Wolfe's devices away from Windows, which moves the
+// applications using them to the default device: easy to do by mistake, and
+// annoying to undo. Asked first, every time the user exits.
+bool userConfirmsExit(HWND window) {
+    std::wstring names;
+    if (g_controller) {
+        for (const Node& node : g_controller->nodes()) {
+            if (node.isWolfeDevice()) names += (names.empty() ? L"" : L", ") + toWide(node.label);
+        }
+    }
+    const std::wstring text =
+        names.empty() ? L"Exit Wolfe? Audio stops going through it."
+                      : L"Exit Wolfe?\n\nIts devices (" + names +
+                            L") will disappear from Windows, and applications using them will move to the default "
+                            L"device until Wolfe starts again.";
+    // The window may be hidden: then the question comes up on its own, in front.
+    HWND owner = IsWindowVisible(window) ? window : nullptr;
+    return MessageBoxW(owner, text.c_str(), L"Wolfe", MB_OKCANCEL | MB_ICONQUESTION | MB_DEFBUTTON2 | MB_SETFOREGROUND |
+                                                          (owner ? 0 : MB_TOPMOST)) == IDOK;
+}
+
 void showTrayMenu(HWND window) {
     HMENU menu = CreatePopupMenu();
     AppendMenuW(menu, MF_STRING, kMenuOpen, L"Open Wolfe");
@@ -124,7 +145,7 @@ void showTrayMenu(HWND window) {
     const int chosen = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, cursor.x, cursor.y, 0, window, nullptr);
     DestroyMenu(menu);
     if (chosen == kMenuOpen) showWindow(window);
-    if (chosen == kMenuExit) DestroyWindow(window);
+    if (chosen == kMenuExit && userConfirmsExit(window)) DestroyWindow(window);
 }
 
 LRESULT CALLBACK windowProcedure(HWND window, UINT message, WPARAM wParam, LPARAM lParam) {
@@ -146,7 +167,7 @@ LRESULT CALLBACK windowProcedure(HWND window, UINT message, WPARAM wParam, LPARA
         case WM_CLOSE:
             // The audio must keep flowing: closing only hides, unless the user turned that off.
             if (g_controller && g_controller->closeToTray()) ShowWindow(window, SW_HIDE);
-            else DestroyWindow(window);
+            else if (g_selfTesting || userConfirmsExit(window)) DestroyWindow(window);
             return 0;
         case WM_DESTROY:
             PostQuitMessage(0);
@@ -210,8 +231,11 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE, LPSTR, int) {
         }
     }
 
-    // There is no console: what the engine reports goes to a file.
-    _wfreopen(toWide(logFilePath()).c_str(), L"w", stderr);
+    // There is no console: what the engine reports goes to a file. A copy on a
+    // graph file of its own writes next to that file, and leaves the usual
+    // log to the usual copy.
+    const std::string log = document == defaultDocumentPath() ? logFilePath() : document + ".log";
+    _wfreopen(toWide(log).c_str(), L"w", stderr);
 
     ImGui_ImplWin32_EnableDpiAwareness();
     const float scale = ImGui_ImplWin32_GetDpiScaleForMonitor(MonitorFromPoint(POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY));
@@ -323,7 +347,10 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE, LPSTR, int) {
             ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
             g_swapChain->Present(1, 0);
 
-            if (editor.exitRequested) DestroyWindow(window);
+            if (editor.exitRequested) {
+                editor.exitRequested = false;
+                if (userConfirmsExit(window)) DestroyWindow(window);
+            }
         }
         g_controller = nullptr;
     }  // the controller saves the graph and stops the engine here
