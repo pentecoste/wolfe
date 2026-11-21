@@ -381,6 +381,29 @@ void Editor::drawMenuBar() {
     ImGui::EndMenuBar();
 }
 
+void Editor::startRenaming(int selectorUid, int fromUid) {
+    renamingSelector_ = selectorUid;
+    renamingInput_ = fromUid;
+    renamingFocus_ = true;
+    snprintf(newName_, sizeof(newName_), "%s", controller_.inputName(selectorUid, fromUid).c_str());
+}
+
+// The line of a selector's input being renamed: a field to type in. Enter
+// or a click elsewhere keeps the name, Escape leaves it as it was.
+void Editor::drawRenaming(int selectorUid, int fromUid, float width) {
+    ImGui::SetNextItemWidth(width);
+    if (renamingFocus_) ImGui::SetKeyboardFocusHere();
+    const bool entered = ImGui::InputTextWithHint("##name", "the source's own name", newName_, sizeof(newName_),
+                                                  ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll);
+    if (renamingFocus_) {
+        renamingFocus_ = false;
+        return;  // (it becomes active only in the next frame)
+    }
+    const bool escaped = ImGui::IsKeyPressed(ImGuiKey_Escape, false);
+    if (entered || (ImGui::IsItemDeactivated() && !escaped)) controller_.renameInput(selectorUid, fromUid, newName_);
+    if (entered || escaped || !ImGui::IsItemActive()) renamingSelector_ = renamingInput_ = 0;
+}
+
 void Editor::showWelcome() {
     welcome_ = true;
     welcomeOpened_ = false;
@@ -818,19 +841,28 @@ void Editor::drawNode(const Node& node) {
         }
 
         // A selector: the sources linked into it, one line each; a click on
-        // one lets it through instead of the others.
+        // one lets it through instead of the others, a double click gives it
+        // a name of the user's.
         if (node.isSelector()) {
             const std::vector<int> inputs = controller_.inputsOf(node.uid);
             const int chosen = controller_.selectedInput(node.uid);
             if (inputs.empty()) ImGui::TextDisabled("%s", fit("link sources into \"in\"", width).c_str());
+            const float radio = ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x;
             for (int from : inputs) {
                 const Node* source = controller_.node(from);
                 if (!source) continue;
-                std::string name = source->label, adapter;
-                if (source->isDevice()) splitDeviceName(source->label, name, adapter);
                 ImGui::PushID(from);
-                const float radio = ImGui::GetFrameHeight() + ImGui::GetStyle().ItemInnerSpacing.x;
-                if (ImGui::RadioButton(fit(name, width - radio).c_str(), from == chosen)) controller_.select(node.uid, from);
+                if (renamingSelector_ == node.uid && renamingInput_ == from) {
+                    drawRenaming(node.uid, from, width);
+                } else {
+                    const std::string name = controller_.inputName(node.uid, from);
+                    if (ImGui::RadioButton(fit(name, width - radio).c_str(), from == chosen)) controller_.select(node.uid, from);
+                    if (ImGui::IsItemHovered()) {
+                        if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) startRenaming(node.uid, from);
+                        helpTip_ = controller_.inputRenamed(node.uid, from) ? "From \"" + source->label + "\".\n" : "";
+                        helpTip_ += "Double-click to give it a name of your own.";
+                    }
+                }
                 ImGui::PopID();
             }
         }
@@ -1090,8 +1122,20 @@ void Editor::drawMenus() {
             ImGui::TextDisabled("%s", node->label.c_str());
             ImGui::Separator();
             // Each of these may change the list of nodes: `node` is not used after them.
+            const bool selector = node->isSelector();
+            const std::vector<int> inputs = selector ? controller_.inputsOf(uid) : std::vector<int>();
             if (ImGui::MenuItem("Mute", nullptr, muted)) {
                 controller_.setMuted(uid, !muted);
+            } else if (selector && ImGui::BeginMenu("Rename an input", !inputs.empty())) {
+                for (int from : inputs) {
+                    ImGui::PushID(from);
+                    if (ImGui::MenuItem((controller_.inputName(uid, from) + "...").c_str())) {
+                        startRenaming(uid, from);
+                        ImGui::CloseCurrentPopup();
+                    }
+                    ImGui::PopID();
+                }
+                ImGui::EndMenu();
             } else if (type && !type->parameters.empty() && ImGui::MenuItem("Reset values", nullptr, false, changed)) {
                 controller_.resetParameters(uid);
             } else if (ImGui::MenuItem("Disconnect everything", nullptr, false, connected)) {

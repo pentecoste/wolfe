@@ -51,6 +51,9 @@ struct Node {
     // A selector: the id of the node whose link into it goes through, as the
     // user chose it (see Controller::selectedInput()).
     std::string selected;
+    // A selector: the names the user gave its inputs, by the id of the node
+    // each comes from (see Controller::inputName()).
+    std::map<std::string, std::string> inputNames;
 
     bool resolved = false;  // devices: `target` is the device's own id, not part of its name
     bool present = false;   // the device is plugged in (Wolfe's: Windows has it)
@@ -159,6 +162,13 @@ public:
     // user chose, or the first if that one is not linked any more.
     void select(int selectorUid, int fromUid);
     int selectedInput(int selectorUid) const;  // its uid; 0 with nothing linked
+    // What a selector calls one of its inputs: the name the user gave it, or
+    // the source's own (a device's without its adapter).
+    std::string inputName(int selectorUid, int fromUid) const;
+    // A name of the user's for an input of a selector; empty (or the source's
+    // own name) goes back to the source's own. At most 40 letters.
+    void renameInput(int selectorUid, int fromUid, const std::string& name);
+    bool inputRenamed(int selectorUid, int fromUid) const;
     // The nodes linked into a node, in the order their links were made.
     std::vector<int> inputsOf(int nodeUid) const;
     // The links that carry no sound because of a mute (of a box or a link,

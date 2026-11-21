@@ -24,6 +24,7 @@ struct NodeDescription {
     std::map<std::string, double> parameters;
     bool muted = false;  // passes on silence (see Graph::setMuted)
     std::string selected;  // a selector: the node whose link into it it lets through (empty: the first)
+    std::map<std::string, std::string> names;  // a selector: names given to its inputs, by the id of the node each comes from
     bool hasPosition = false;  // where the graphical editor drew it
     float x = 0, y = 0;
 };

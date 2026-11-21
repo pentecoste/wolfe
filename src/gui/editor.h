@@ -58,6 +58,8 @@ private:
     void askToRemove(int nodeUid);
     void placeNew(int uid, ImVec2 screenPosition);
     void drawWelcome();
+    void startRenaming(int selectorUid, int fromUid);
+    void drawRenaming(int selectorUid, int fromUid, float width);
     // Zoom: steps of 10%, 0 being the actual size.
     void zoomBy(int steps, ImVec2 pivot);
     void zoomTo(int step, ImVec2 pivot);
@@ -115,7 +117,12 @@ private:
     std::string flash_;
     double flashUntil_ = 0;
 
-    std::string helpTip_;        // the "?" under the mouse in this frame says this
+    // An input of a selector being given a name: which, and what is typed so far.
+    int renamingSelector_ = 0, renamingInput_ = 0;
+    bool renamingFocus_ = false;  // the field is to take the keyboard in this frame
+    char newName_[64] = "";
+
+    std::string helpTip_;        // what is under the mouse in this frame says this
     bool showAllWanted_ = false;
     bool welcome_ = false, welcomeOpened_ = false;
 };

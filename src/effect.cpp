@@ -502,7 +502,8 @@ const std::vector<EffectType>& effectTypes() {
         {"select", "Selector", "lets one of its inputs through", "selector switch choose source input one of", true, {},
          "Link several sources into it: only the one\n"
          "picked in the box goes on, the others are silent.\n"
-         "Click another line in the box to switch."},
+         "Click another line in the box to switch.\n"
+         "Double-click a line to give it a name of your own."},
         // --- level
         {"gain", "Gain", "louder or quieter", "volume level louder quieter", true,
          {{"gain_db", "%+.1f dB", -60, 24, 0, false, 0.1f, "silent"}},

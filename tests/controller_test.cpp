@@ -573,6 +573,20 @@ void testSelector() {
         expect(controller.selectedInput(selector) == mic, "and stays when the other comes back");
         controller.select(selector, third);
         chosenUid = third;
+
+        expect(controller.inputName(selector, mic) == "Test Microphone" && controller.inputName(selector, third) == "Gain",
+               "an input is called by its source's name, a device's without its adapter");
+        controller.renameInput(selector, mic, "  Voice  ");
+        controller.renameInput(selector, third, "Musica più bassa");
+        expect(controller.inputName(selector, mic) == "Voice" && controller.inputRenamed(selector, mic),
+               "it can be given a name of the user's, trimmed");
+        expect(controller.inputName(selector, third) == "Musica più bassa", "in any language");
+        controller.renameInput(selector, cable, std::string(60, 'x'));
+        expect(controller.inputName(selector, cable).size() == 40, "of at most 40 letters");
+        controller.renameInput(selector, cable, "");
+        expect(!controller.inputRenamed(selector, cable) && controller.inputName(selector, cable) == "CABLE Output",
+               "an empty name gives back the source's own");
+        controller.renameInput(selector, phones, "Nope");
         controller.save();
     }
     expect(readFile(document).find("\"selected\"") != std::string::npos, "the choice is written in the file");
@@ -584,6 +598,14 @@ void testSelector() {
     }
     const int chosen = selector ? reloaded.selectedInput(selector->uid) : 0;
     expect(chosen && reloaded.node(chosen)->type == "gain", "and it is the same one after loading");
+    expect(chosen && reloaded.inputName(selector->uid, chosen) == "Musica più bassa" && selector->inputNames.size() == 2,
+           "with the names given to its inputs");
+    const Node* mic = firstOf(reloaded, NodeKind::Input);
+    reloaded.removeNode(mic->uid);
+    for (const Node& node : reloaded.nodes()) {
+        if (node.isSelector()) selector = &node;
+    }
+    expect(selector->inputNames.size() == 1, "a source removed takes its name with it");
     (void)chosenUid;
 }
 

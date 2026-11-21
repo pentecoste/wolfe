@@ -30,6 +30,7 @@ private:
     void moveTo(Place where);
     void press(int button, bool down);
     void click(Place where, int button = 0);
+    void doubleClick(Place where);
     void ctrlClick(Place where);
     void drag(Place from, Place to);
     void tapKey(ImGuiKey key);

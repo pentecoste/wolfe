@@ -166,6 +166,7 @@ GraphDescription Controller::describe() const {
         if (node.isDevice()) out.label = node.label;
         out.muted = node.muted;
         out.selected = node.selected;
+        out.names = node.inputNames;
         out.hasPosition = node.hasPosition;
         out.x = node.x;
         out.y = node.y;
@@ -303,6 +304,7 @@ std::string Controller::adopt(const GraphDescription& description) {
         node.target = in.target;
         node.muted = in.muted;
         node.selected = in.selected;
+        node.inputNames = in.names;
         node.hasPosition = in.hasPosition;
         node.x = in.x;
         node.y = in.y;
@@ -537,6 +539,46 @@ void Controller::select(int selectorUid, int fromUid) {
     markDirty();
 }
 
+std::string Controller::inputName(int selectorUid, int fromUid) const {
+    const Node* selector = node(selectorUid);
+    const Node* from = node(fromUid);
+    if (!from) return {};
+    if (selector) {
+        auto given = selector->inputNames.find(from->id);
+        if (given != selector->inputNames.end()) return given->second;
+    }
+    // "Microphone (Realtek Audio)" -> "Microphone"
+    const std::string adapter = from->isDevice() ? adapterOf(from->label) : std::string();
+    return adapter.empty() ? from->label : from->label.substr(0, from->label.size() - adapter.size() - 3);
+}
+
+bool Controller::inputRenamed(int selectorUid, int fromUid) const {
+    const Node* selector = node(selectorUid);
+    const Node* from = node(fromUid);
+    return selector && from && selector->inputNames.count(from->id);
+}
+
+void Controller::renameInput(int selectorUid, int fromUid, const std::string& name) {
+    Node* selector = find(selectorUid);
+    const Node* from = node(fromUid);
+    if (!selector || !selector->isSelector() || !from) return;
+    const std::vector<int> inputs = inputsOf(selectorUid);
+    if (std::find(inputs.begin(), inputs.end(), fromUid) == inputs.end()) return;
+    std::string trimmed = name;
+    while (!trimmed.empty() && trimmed.back() == ' ') trimmed.pop_back();
+    while (!trimmed.empty() && trimmed.front() == ' ') trimmed.erase(trimmed.begin());
+    if (trimmed.size() > 40) {
+        // Cut at a whole letter: what is left of one cut in two goes too.
+        size_t end = 40;
+        while (end > 0 && ((unsigned char)trimmed[end] & 0xC0) == 0x80) end--;
+        trimmed.resize(end);
+    }
+    const auto given = selector->inputNames.find(from->id);
+    if (given != selector->inputNames.end()) selector->inputNames.erase(given);
+    if (!trimmed.empty() && trimmed != inputName(selectorUid, fromUid)) selector->inputNames[from->id] = trimmed;
+    markDirty();
+}
+
 std::set<int> Controller::silentLinks() const {
     // Whether a node gives nothing but silence: muted, unplugged, or with no
     // sound coming into it (for those that pass sound on).
@@ -742,6 +784,7 @@ void Controller::removeNode(int nodeUid) {
     disconnectAll(nodeUid);
     target = find(nodeUid);
     if (target->active) graph_.removeNode(target->id);  // Wolfe's own devices, which links do not keep
+    for (Node& other : nodes_) other.inputNames.erase(target->id);  // what selectors called it
     nodes_.erase(std::remove_if(nodes_.begin(), nodes_.end(), [&](const Node& n) { return n.uid == nodeUid; }),
                  nodes_.end());
     markDirty();

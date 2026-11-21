@@ -68,6 +68,11 @@ GraphDescription loadDescription(const std::string& path) {
         node.label = optionalString(item, "label");
         if (item.contains("muted") && item["muted"].is_boolean()) node.muted = item["muted"].get<bool>();
         node.selected = optionalString(item, "selected");
+        if (item.contains("names") && item["names"].is_object()) {
+            for (const auto& [from, name] : item["names"].items()) {
+                if (name.is_string()) node.names[from] = name.get<std::string>();
+            }
+        }
         if (const EffectType* effect = findEffectType(node.type)) {
             for (const EffectParameter& parameter : effect->parameters) {
                 if (item.contains(parameter.key) && item[parameter.key].is_number()) {
@@ -116,6 +121,11 @@ void saveDescription(const std::string& path, const GraphDescription& descriptio
         if (!node.label.empty()) item["label"] = node.label;
         if (node.muted) item["muted"] = true;
         if (!node.selected.empty()) item["selected"] = node.selected;
+        if (!node.names.empty()) {
+            Json names = Json::object();
+            for (const auto& [from, name] : node.names) names[from] = name;
+            item["names"] = names;
+        }
         if (node.hasPosition) {
             item["x"] = std::round(node.x);
             item["y"] = std::round(node.y);

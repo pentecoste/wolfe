@@ -274,6 +274,35 @@ SelfTest::SelfTest(Controller& controller, std::string reportPath)
                std::fabs(corner.x - before->corner.x) < 2.0f && std::fabs(corner.y - before->corner.y) < 2.0f;
     });
 
+    // A selector's input is renamed with a double click on its line.
+    auto selector = std::make_shared<int>(0);
+    run([this, selector] {
+        const float corner = 5000.0f, scale = ImGui::GetStyle().FontScaleDpi;
+        *selector = controller_.addEffect("select", (corner + 150.0f) / scale, (corner + 40.0f) / scale);
+        controller_.connect(second_, *selector);
+        controller_.connect(third_, *selector);
+    });
+    wait(5);
+    const Place onSecondInput = [selector] {  // its lines come under the one with the pins
+        const ImVec2 pin = pinPosition(*selector, false);
+        const float line = ImGui::GetFrameHeight() + ImGui::GetStyle().ItemSpacing.y;
+        return ImVec2(pin.x + 28.0f * ImGui::GetStyle().FontScaleDpi, pin.y + 2.0f * line);  // on its circle
+    };
+    const auto name = [this, selector] { return controller_.inputName(*selector, third_); };
+    doubleClick(onSecondInput);
+    wait(3);
+    run([] { ImGui::GetIO().AddInputCharactersUTF8("Line two"); });
+    wait(3);
+    tapKey(ImGuiKey_Enter);
+    check("double-clicking a selector's input lets it be named", [name] { return name() == "Line two"; });
+    check("(and lets it through, as a click does)", [this, selector] { return controller_.selectedInput(*selector) == third_; });
+    doubleClick(onSecondInput);
+    wait(3);
+    run([] { ImGui::GetIO().AddInputCharactersUTF8("zzz"); });
+    wait(3);
+    tapKey(ImGuiKey_Escape);
+    check("Escape leaves the name as it was", [name] { return name() == "Line two"; });
+
     run([this, countGains] {
         controller_.removeNode(second_);
         controller_.removeNode(third_);
@@ -338,6 +367,14 @@ void SelfTest::moveTo(Place where) {
 void SelfTest::press(int button, bool down) {
     run([button, down] { ImGui::GetIO().AddMouseButtonEvent(button, down); });
     wait(3);
+}
+
+void SelfTest::doubleClick(Place where) {
+    moveTo(where);
+    press(0, true);
+    press(0, false);
+    press(0, true);
+    press(0, false);
 }
 
 void SelfTest::click(Place where, int button) {

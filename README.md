@@ -134,7 +134,7 @@ That's it: Wolfe remembers the graph and builds it again every time it starts.
 | effect      | what it does                                                        | settings (in the file)                                   |
 |-------------|---------------------------------------------------------------------|----------------------------------------------------------|
 | Junction    | passes the sound on as it is: a point to split or join links, or to mute one branch | none                                     |
-| Selector    | lets through one of the sources linked into it, the one clicked in the box; the others are silent | `selected` (the id of that source's node) |
+| Selector    | lets through one of the sources linked into it, the one clicked in the box; the others are silent. Double-click a source (or use the box's menu) to give it a name of your own | `selected` (the id of that source's node), `names` (by source id) |
 | Gain        | louder or quieter, -60 dB (silent) to +24 dB                        | `gain_db`                                                |
 | Pan         | toward the left (-100) or the right (+100): the other side gets quieter | `pan`                                                 |
 | Compressor  | above the threshold the level rises only 1/ratio as much: evens out a voice | `threshold_db`, `ratio`, `attack_ms`, `release_ms`, `makeup_db` |
@@ -192,7 +192,7 @@ inputs, so that it does not apply its voice processing to them.
 | change a setting            | drag its value left or right (**Shift**: faster, **Alt**: finer); double-click to type one |
 | mute a box                  | click the loudspeaker at the right of its title                      |
 | mute a link                 | right-click it, Mute this link                                       |
-| switch a Selector           | click one of the sources listed in it                                |
+| switch a Selector           | click one of the sources listed in it; double-click one to rename it |
 | learn what a box does       | hover the **?** in its title                                         |
 | open a box's or link's menu | right-click it                                                       |
 | remove what is selected     | **Delete**                                                           |
