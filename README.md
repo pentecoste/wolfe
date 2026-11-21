@@ -1,8 +1,37 @@
-# Wolfe
+<p align="center">
+  <img src="docs/images/logo.png" width="120" alt="Wolfe">
+</p>
 
-An audio patchbay for Windows: microphones, speakers and effects are boxes,
-and you decide what goes where. The idea is what qpwgraph or Carla give you
-on Linux, built on what Windows offers.
+<h1 align="center">Wolfe</h1>
+
+<p align="center">
+  <b>An audio patchbay for Windows.</b><br>
+  Make speakers and microphones of your own, and wire them to your real ones through effects.
+</p>
+
+<p align="center">
+  <a href="https://github.com/pentecoste/wolfe/releases/latest"><img src="https://img.shields.io/github/v/release/pentecoste/wolfe?style=flat-square&color=6CB6FF&label=release" alt="Latest release"></a>
+  <a href="https://github.com/pentecoste/wolfe/releases"><img src="https://img.shields.io/github/downloads/pentecoste/wolfe/total?style=flat-square&color=6CB6FF" alt="Downloads"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/pentecoste/wolfe?style=flat-square&color=blue" alt="License: GPL-3.0"></a>
+  <img src="https://img.shields.io/badge/Windows-10%20%7C%2011-0078D6?style=flat-square&logo=windows&logoColor=white" alt="Windows 10 and 11">
+  <img src="https://img.shields.io/badge/C%2B%2B-20-00599C?style=flat-square&logo=cplusplus&logoColor=white" alt="C++20">
+  <a href="https://github.com/pentecoste/wolfe/commits/main"><img src="https://img.shields.io/github/last-commit/pentecoste/wolfe?style=flat-square" alt="Last commit"></a>
+</p>
+
+<p align="center">
+  <a href="#install">Install</a> ·
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#effects">Effects</a> ·
+  <a href="#the-window">The window</a> ·
+  <a href="#building-from-source">Build</a>
+</p>
+
+<p align="center">
+  <img src="docs/images/canvas.png" alt="Wolfe's canvas: a microphone through noise suppression, a high-pass filter and a compressor; an equalizer feeding a reverb and a gain, mixed into a limiter and on to the headphones">
+</p>
+
+What qpwgraph or Carla give you on Linux, built on what Windows offers.
+Microphones, speakers and effects are boxes, and you decide what goes where.
 
 Wolfe is one big node of its own. It has playback and recording devices of
 its own, which Windows lists like any sound card. Which applications play on
@@ -10,18 +39,46 @@ them or record from them is chosen in Windows' settings; inside Wolfe they
 are boxes like your microphone and your headphones, and you link them as you
 like.
 
-There are two programs on the same engine: `wolfe.exe`, a window with the
-patch canvas that keeps running in the notification area, and `wolfe-cli.exe`,
-which runs a graph described in a JSON file from a console.
+## Features
+
+- 🔊 **Devices of its own.** Wolfe speakers and Wolfe microphones appear in
+  Windows like any sound card, and any application can use them. No virtual
+  cable to install: they are USB sound cards, attached through
+  [usbip-win2](https://github.com/vadimgrn/usbip-win2), whose driver is
+  signed by Microsoft.
+- 🎛️ **A real patchbay.** Link microphones, speakers and Wolfe's devices as
+  you like: one source to many places, many sources into one, effects in
+  between. Links that would loop are refused.
+- ✨ **15 effects.** Noise suppression with RNNoise (as in Mumble), compressor,
+  limiter, noise gate, filters, equalizer, delay, reverb, chorus and more.
+- ⚡ **Low latency.** 10 ms cycles; an application on a Wolfe speaker reaches
+  your headphones in 35-40 ms. Every device's clock is followed, so devices
+  do not drift apart over time.
+- 🧲 **Applications come back.** When Wolfe starts again, applications you gave
+  its devices are moved back to them; those you put back on the default device
+  stay there.
+- 🪶 **Out of the way.** Lives in the notification area, starts with Windows,
+  saves the graph by itself.
+- 🆓 **Free software**, under the GNU GPL 3.0.
 
 ## Install
 
-Download `Wolfe-Setup-<version>.exe` from the release and run it. It asks
-for an administrator once, installs Wolfe, and installs
+Download **`Wolfe-Setup-<version>.exe`** from the
+[latest release](https://github.com/pentecoste/wolfe/releases/latest) and run
+it. It needs Windows 10 (1903 or later) or 11, 64-bit.
+
+Setup asks for an administrator once, installs Wolfe, and installs
 [usbip-win2](https://github.com/vadimgrn/usbip-win2) too when it is missing
 or older than the copy it carries (its own, unmodified installer, run
 silently: only the client and its drivers). While usbip-win2's driver goes
 in, Windows restarts the USB controllers, so USB devices stop for a moment.
+
+> [!NOTE]
+> The program is not signed: Windows SmartScreen may warn about it the first
+> time. Choose "More info", then "Run anyway".
+
+<details>
+<summary>More about setup and uninstalling</summary>
 
 - "Start Wolfe with Windows" is offered, and ticked: Wolfe's devices exist
   only while it runs. The same setting is in Wolfe's own menu.
@@ -31,58 +88,38 @@ in, Windows restarts the USB controllers, so USB devices stop for a moment.
 - Uninstalling (Installed apps) removes Wolfe and its "start with Windows"
   entry. Your graph and settings in `%APPDATA%\Wolfe` stay, and so does
   usbip-win2, which has its own entry in Installed apps.
+- Wolfe offers its devices over USB/IP on 127.0.0.1 (port 3241) and has
+  usbip-win2 attach them; using them needs no administrator. Another USB/IP
+  server on the machine (usbipd-win) is fine: it uses port 3240. Without
+  usbip-win2 everything else works, but Wolfe has no devices of its own.
 
-The program is not signed: Windows SmartScreen may warn about it the first
-time ("More info", then "Run anyway").
+</details>
 
-## What it needs
+## Quick start
 
-- [usbip-win2](https://github.com/vadimgrn/usbip-win2), for Wolfe's own
-  devices. Its driver is signed by Microsoft; installing it needs an
-  administrator once, using it does not. Wolfe offers its devices over USB/IP
-  on 127.0.0.1 (port 3241) and has usbip-win2 attach them: to Windows they
-  are USB sound cards. Without it everything else works, but Wolfe has no
-  devices of its own.
-- Another USB/IP server on the machine (usbipd-win) is fine: it uses port 3240.
+Say you want your friends on Discord to hear your voice, cleaned up, with
+Spotify quietly behind it, while you hear Spotify in your headphones:
 
-## Build
+```mermaid
+flowchart LR
+    spotify([Spotify]) --> music[Wolfe Music]
+    music --> phones[Headphones]
+    music --> quiet[Gain -12 dB] --> chat[Wolfe Chat]
+    mic[Your microphone] --> clean[Noise suppression] --> chat
+    chat --> discord([Discord])
+```
 
-Needs the MSYS2 toolchain (g++) and CMake on the PATH.
+1. In Wolfe, press **Ctrl+A**, type `wolfe speaker` and Enter, and call it
+   *Wolfe Music*. Do the same with `wolfe microphone`, *Wolfe Chat*.
+2. In Windows, give Spotify the output *Wolfe Music* (Settings > System >
+   Sound > Volume mixer). In Discord, choose *Wolfe Chat* as the microphone.
+3. Back in Wolfe, add your headphones, your microphone, a Gain and a Noise
+   suppression with **Ctrl+A**, and drag links between the pins as in the
+   picture above. Drag the Gain's value down to -12 dB.
 
-    cmake -S . -B build -G "MinGW Makefiles"
-    cmake --build build -j 8
+That's it: Wolfe remembers the graph and builds it again every time it starts.
 
-This produces, in `build/`:
-
-- `wolfe.exe`: the program
-- `wolfe-cli.exe`: the same engine from a console
-- `wolfe-enginetest.exe`, `wolfe-controllertest.exe`: checks that need no audio device
-- `wolfe-sigtool.exe`: plays test signals and records devices, for measuring
-- `wolfe-makeicon.exe`: writes the program's icon to `res/wolfe.ico`
-
-The installer is built by `installer\build.ps1` (needs Inno Setup 6 as well:
-`winget install JRSoftware.InnoSetup`). It builds the program in Release into
-`build\release`, downloads usbip-win2's installer into `installer\cache` and
-checks it against its published SHA-256, and writes
-`dist\Wolfe-Setup-<version>.exe`. The version is the one in `CMakeLists.txt`.
-
-## The window
-
-The canvas shows only what you put on it. **Ctrl+A** opens a search for
-something to add: type part of its name, and Enter adds the one highlighted
-(Up and Down choose another). The Add menu, and a right click on the canvas,
-offer the search, the effects and Wolfe's own devices; the computer's
-microphones and speakers are added from the search.
-
-| box              | what it is                                                                          | pin   |
-|------------------|-------------------------------------------------------------------------------------|-------|
-| Microphone       | a recording device of the computer (a microphone, the far end of a virtual cable)  | out   |
-| Wolfe speaker    | a playback device of Wolfe's own: what applications play on it comes into Wolfe     | out   |
-| an effect        | changes what is linked into it and passes it on (see below)                        | both  |
-| Speaker          | a playback device of the computer (headphones, speakers)                           | in    |
-| Wolfe microphone | a recording device of Wolfe's own: applications that record from it hear what is linked into it | in |
-
-The effects, and their settings:
+## Effects
 
 | effect      | what it does                                                        | settings (in the file)                                   |
 |-------------|---------------------------------------------------------------------|----------------------------------------------------------|
@@ -107,6 +144,22 @@ effect changes nothing. Apart from the echoes that Delay, Reverb and Chorus
 are for, effects add no delay to the audio, except Noise suppression: RNNoise
 hands back each 10 ms one block late, so it adds 10 ms.
 
+## The window
+
+The canvas shows only what you put on it. **Ctrl+A** opens a search for
+something to add: type part of its name, and Enter adds the one highlighted
+(Up and Down choose another). The Add menu, and a right click on the canvas,
+offer the search, the effects and Wolfe's own devices; the computer's
+microphones and speakers are added from the search.
+
+| box              | what it is                                                                          | pin   |
+|------------------|-------------------------------------------------------------------------------------|-------|
+| Microphone       | a recording device of the computer (a microphone, the far end of a virtual cable)  | out   |
+| Wolfe speaker    | a playback device of Wolfe's own: what applications play on it comes into Wolfe     | out   |
+| an effect        | changes what is linked into it and passes it on (see [Effects](#effects))           | both  |
+| Speaker          | a playback device of the computer (headphones, speakers)                           | in    |
+| Wolfe microphone | a recording device of Wolfe's own: applications that record from it hear what is linked into it | in |
+
 Wolfe takes audio from microphones and from its own speakers, and sends it to
 speakers and to its own microphones. It does not show applications and does
 not move them: give an application one of Wolfe's devices in Windows'
@@ -114,52 +167,37 @@ settings (Settings > System > Sound > Volume mixer) or in the application's
 own, and link that device in Wolfe. Windows shows Wolfe's microphones as line
 inputs, so that it does not apply its voice processing to them.
 
-- Drag from a pin to another pin to link them. A pin takes any number of
-  links: links into the same box are added together, and a box can feed any
-  number of others. A link that would bring audio back to where it came from
-  is refused, also through the two ends of a virtual cable.
-- Drag a link itself to move it: the end nearer to where you took hold comes
-  off, and goes onto the pin you let go on. Pulled well away and let go over
-  nothing, the link is removed; so it is with Ctrl+click, or by clicking it
-  and pressing Delete.
-- An effect's settings are dragged left or right (Shift: faster, Alt: finer);
-  a double click lets you type one. Its menu puts them back as they started.
-- The loudspeaker at the right of a box's title mutes it inside Wolfe: what
-  comes out of a microphone, a Wolfe speaker or an effect becomes silence,
-  and a speaker or a Wolfe microphone is given silence. The device itself,
-  and its mute in Windows, are not touched. A muted box's loudspeaker is red
-  and crossed out, and its links are grey; muting is kept in the file
-  (`"muted": true`).
-- Right-click a box or a link for its menu. Delete removes what is selected.
-- Middle button, or Alt + drag, moves the view.
-- The mouse wheel zooms in and out around the mouse (39% to 214%); so do
-  Ctrl and + or -, and the View menu. Ctrl+0 goes back to the actual size.
-  Zooming changes only the view, not the positions kept in the file.
+| to…                         | do this                                                              |
+|-----------------------------|----------------------------------------------------------------------|
+| add something               | **Ctrl+A**, the Add menu, or right-click the canvas                  |
+| link two boxes              | drag from a pin to another pin                                       |
+| move a link                 | drag the link itself: the nearer end comes off and goes where you let go |
+| remove a link               | pull it away and let go over nothing, **Ctrl+click** it, or click it and press **Delete** |
+| change a setting            | drag its value left or right (**Shift**: faster, **Alt**: finer); double-click to type one |
+| mute a box                  | click the loudspeaker at the right of its title                      |
+| open a box's or link's menu | right-click it                                                       |
+| remove what is selected     | **Delete**                                                           |
+| move the view               | middle button, or **Alt** + drag                                     |
+| zoom                        | mouse wheel, **Ctrl +** / **Ctrl -**, the View menu; **Ctrl+0** for the actual size |
+
+- A pin takes any number of links: links into the same box are added
+  together, and a box can feed any number of others. A link that would bring
+  audio back to where it came from is refused, also through the two ends of a
+  virtual cable.
+- An effect's menu puts its settings back as they started.
+- Muting works inside Wolfe: what comes out of a microphone, a Wolfe speaker
+  or an effect becomes silence, and a speaker or a Wolfe microphone is given
+  silence. The device itself, and its mute in Windows, are not touched. A
+  muted box's loudspeaker is red and crossed out, and its links are grey;
+  muting is kept in the file (`"muted": true`).
+- Zooming goes from 39% to 214%, around the mouse, and changes only the
+  view, not the positions kept in the file.
 
 Removing one of Wolfe's devices is asked first: Windows loses it, and sends
 the applications that were given it back to the default device. A new device
 with the same name is a new device to Windows. Wolfe's devices exist while
 Wolfe runs, whether or not anything is linked to them; a device of the
 computer is only opened while something is linked to it.
-
-### When Wolfe is closed, and comes back
-
-While Wolfe is not running its devices are gone, and Windows plays the
-applications that were given them on the default device. Exiting is
-therefore asked first (Exit in the Wolfe menu or on the icon, or closing the
-window when Wolfe is not kept running).
-
-Windows keeps remembering which device each application was given, also
-while that device is missing; an application put back on the default device
-on purpose has no device of its own any more. So when Wolfe's devices come
-back (Wolfe starts again, or starts after the applications), Wolfe looks for
-applications that were given one of them but are playing elsewhere, and
-moves them back, within a couple of seconds, once each; those put on the
-default device on purpose stay where they are. The log says which were
-moved. This uses the interface Windows' own settings use, which is not
-documented: on Windows older than 10 21H2 it is not there, and those
-applications go back to Wolfe's devices only when they open their audio
-again (usually when they are restarted).
 
 ### What a box says
 
@@ -183,6 +221,27 @@ has a level while something records from it). A box with an orange outline is
 linked but not working: its text says why. When a link cannot be made, the
 reason appears next to the mouse.
 
+### When Wolfe is closed, and comes back
+
+While Wolfe is not running its devices are gone, and Windows plays the
+applications that were given them on the default device. Exiting is
+therefore asked first (Exit in the Wolfe menu or on the icon, or closing the
+window when Wolfe is not kept running).
+
+Windows keeps remembering which device each application was given, also
+while that device is missing; an application put back on the default device
+on purpose has no device of its own any more. So when Wolfe's devices come
+back (Wolfe starts again, or starts after the applications), Wolfe looks for
+applications that were given one of them but are playing elsewhere, and
+moves them back, within a couple of seconds, once each; those put on the
+default device on purpose stay where they are. The log says which were
+moved. This uses the interface Windows' own settings use, which is not
+documented: on Windows older than 10 21H2 it is not there, and those
+applications go back to Wolfe's devices only when they open their audio
+again (usually when they are restarted).
+
+### Where things are kept
+
 The graph is saved by itself in `%APPDATA%\Wolfe\graph.json` and loaded again
 at the next start. Closing the window leaves Wolfe running in the notification
 area (the Wolfe menu can turn that off, and can make it start with Windows);
@@ -196,7 +255,24 @@ Exit is in that menu and on the icon. What the engine reports is written to
     wolfe.exe --selftest <file>  try the mouse and keyboard gestures by itself
                                  and write what happened to a file
 
+## Limits that come from Windows
+
+- Windows connects an application to one playback device at a time and one
+  recording device at a time, chosen in its settings or in the application.
+  Wolfe does not change that choice; it gives applications devices worth
+  choosing.
+- Windows makes a new device the default one when it first appears, and
+  again every time it comes back while it is the default Windows remembers:
+  a Wolfe microphone would then be the default every time Wolfe starts.
+  Choose your own device as the default once (Settings > System > Sound) and
+  Windows remembers that instead.
+- An application muted in the Windows volume mixer is silent on Wolfe's
+  devices too.
+
 ## The console program
+
+`wolfe-cli.exe` runs the same engine on a graph described in a JSON file,
+from a console.
 
     wolfe-cli devices                 list the audio devices
     wolfe-cli run examples/soundrio.json
@@ -206,7 +282,7 @@ seconds (`--report N` changes that, `--seconds N` makes it stop by itself).
 Do not run it on the same devices as the window at the same time: the audio
 would arrive twice.
 
-## The graph file
+### The graph file
 
     {
       "nodes": [
@@ -233,7 +309,7 @@ The window writes the same format, adding where each box is drawn. Comments
 | `virtual_mic`     | one of Wolfe's recording devices            | `name`   |
 | `input`           | a recording device                          | `device` |
 | `output`          | a playback device                           | `device` |
-| an effect         | `gain`, `pan`, `compressor`, `limiter`, `gate`, `rnnoise`, `highpass`, `lowpass`, `equalizer`, `delay`, `reverb`, `chorus`, `tremolo`, `distortion`, `bitcrusher` | its settings, by the names in the table above; one left out keeps its initial value |
+| an effect         | `gain`, `pan`, `compressor`, `limiter`, `gate`, `rnnoise`, `highpass`, `lowpass`, `equalizer`, `delay`, `reverb`, `chorus`, `tremolo`, `distortion`, `bitcrusher` | its settings, by the names in [Effects](#effects); one left out keeps its initial value |
 
 `device` is `default`, or any part of the device name as `wolfe-cli devices`
 shows it. Devices that are missing are retried every second.
@@ -255,7 +331,8 @@ nodes (everything one application plays, `process`), `mix` (a junction), and
 0 dB (so that their links stay), links lose their gain, and the rest is left
 out; its log says what was changed.
 
-## Reading the report
+<details>
+<summary><b>Reading the report</b></summary>
 
     in  mic          capturing Microfono (Razer Seiren Mini)   peak -41.4 dB
     in  music        Wolfe's speaker "Wolfe Music": ready  peak -12.0 dB
@@ -278,6 +355,8 @@ then on, so this should stop growing after the first seconds.
 
 For each of Wolfe's devices: how often its stream restarted, jumped to catch
 up with the graph, or (a microphone) found audio missing.
+
+</details>
 
 ## How it works
 
@@ -307,19 +386,26 @@ hardware output, 35-40 ms; into an application recording from a Wolfe
 microphone, 85-100 ms, of which 60-70 ms are spent inside Windows between the
 device and the application.
 
-## Limits that come from Windows
+## Building from source
 
-- Windows connects an application to one playback device at a time and one
-  recording device at a time, chosen in its settings or in the application.
-  Wolfe does not change that choice; it gives applications devices worth
-  choosing.
-- Windows makes a new device the default one when it first appears, and
-  again every time it comes back while it is the default Windows remembers:
-  a Wolfe microphone would then be the default every time Wolfe starts.
-  Choose your own device as the default once (Settings > System > Sound) and
-  Windows remembers that instead.
-- An application muted in the Windows volume mixer is silent on Wolfe's
-  devices too.
+Needs the MSYS2 toolchain (g++) and CMake on the PATH.
+
+    cmake -S . -B build -G "MinGW Makefiles"
+    cmake --build build -j 8
+
+This produces, in `build/`:
+
+- `wolfe.exe`: the program
+- `wolfe-cli.exe`: the same engine from a console
+- `wolfe-enginetest.exe`, `wolfe-controllertest.exe`: checks that need no audio device
+- `wolfe-sigtool.exe`: plays test signals and records devices, for measuring
+- `wolfe-makeicon.exe`: writes the program's icon to `res/wolfe.ico`
+
+The installer is built by `installer\build.ps1` (needs Inno Setup 6 as well:
+`winget install JRSoftware.InnoSetup`). It builds the program in Release into
+`build\release`, downloads usbip-win2's installer into `installer\cache` and
+checks it against its published SHA-256, and writes
+`dist\Wolfe-Setup-<version>.exe`. The version is the one in `CMakeLists.txt`.
 
 ## Third-party code
 
