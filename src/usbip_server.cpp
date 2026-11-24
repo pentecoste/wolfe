@@ -62,6 +62,14 @@ constexpr double kSpeakerAheadFrames = kSampleRate * 0.002;
 constexpr double kLeadRise = 0.002;
 constexpr double kMicrophoneBehindFrames = kSampleRate * 0.003;
 
+// A stream that is on but has had no request from Windows for this long is
+// idle or stuck (the log tells which by what the application shows); one whose
+// oldest request is this far past its due time has stalled in Wolfe. Both are
+// said in the log, since nothing else would show them.
+constexpr double kNoRequestsSeconds = 0.5;
+constexpr double kOverdueSeconds = 0.2;
+constexpr DWORD kWatchMs = 250;
+
 constexpr uint32_t kSpeedHigh = 3;  // in USB/IP's numbering
 constexpr int32_t kEPIPE = -32, kECONNRESET = -104;
 
@@ -230,12 +238,16 @@ public:
     // Until the connection ends.
     void run() {
         device_->connected = true;
+        logLine("Wolfe device \"%s\": connected", device_->name.c_str());
         std::thread clock([this] { clockMain(); });
+        std::thread watch([this] { watchMain(); });
         receiveMain();
         stop_ = true;
         clock.join();
+        watch.join();
         device_->connected = false;
         device_->streaming = false;
+        logLine("Wolfe device \"%s\": connection ended", device_->name.c_str());
     }
 
 private:
@@ -341,6 +353,11 @@ private:
 
     void setStreaming(bool on) {
         std::lock_guard<std::mutex> lock(mutex_);
+        if (on != alternate_) {
+            logLine("Wolfe device \"%s\": Windows %s its stream", device_->name.c_str(), on ? "started" : "stopped");
+        }
+        // The watch gives a stream that just started the time to get going.
+        if (on) lastDataRequest_ = nowSeconds();
         alternate_ = on;
         data_ = Stream();
         feedback_ = Stream();
@@ -353,6 +370,7 @@ private:
         Stream& s = role == Role::Feedback ? feedback_ : data_;
         const double period = role == Role::Feedback ? kFeedbackSeconds : kPacketSeconds;
         const double now = nowSeconds();
+        if (role == Role::Data) lastDataRequest_ = now;
 
         auto urb = std::make_unique<Urb>();
         urb->seqnum = seqnum;
@@ -470,6 +488,57 @@ private:
         }
     }
 
+    // Looks at the stream from outside the threads that move it, and says in
+    // the log when it stalls and when it gets going again. Two ways: Windows
+    // stops sending requests while the stream is on, or the requests it sent
+    // stop being completed (the clock thread is held up). Either way the
+    // application on the device is stuck while the graph runs on as usual.
+    void watchMain() {
+        double noRequestsSince = 0, overdueSince = 0;  // 0: not stalled
+        while (!stop_) {
+            Sleep(kWatchMs);
+            const double now = nowSeconds();
+            bool on = false;
+            double overdue = 0;
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                on = alternate_;
+                for (const auto& urb : pending_) overdue = std::max(overdue, now - urb->due);
+            }
+
+            const double quiet = now - lastDataRequest_.load();
+            const bool noRequests = on && quiet > kNoRequestsSeconds;
+            if (noRequests && !noRequestsSince) {
+                noRequestsSince = now - quiet;
+                // Also what an idle device does: Windows keeps the stream on
+                // without requests while nothing plays. Stuck is when this
+                // comes while an application shows that it is playing.
+                logLine("Wolfe device \"%s\": no audio requests from Windows for %.1f s (nothing uses it, or it is stuck)",
+                        device_->name.c_str(), quiet);
+            } else if (!noRequests && noRequestsSince) {
+                if (on) {
+                    logLine("Wolfe device \"%s\": Windows sends audio requests again, after %.1f s without",
+                            device_->name.c_str(), now - noRequestsSince);
+                } else {
+                    logLine("Wolfe device \"%s\": its stream was stopped after %.1f s without audio requests",
+                            device_->name.c_str(), now - noRequestsSince);
+                }
+                noRequestsSince = 0;
+            }
+
+            const bool late = overdue > kOverdueSeconds;
+            if (late && !overdueSince) {
+                overdueSince = now - overdue;
+                logLine("Wolfe device \"%s\": its requests are not being completed, the oldest is %.0f ms overdue",
+                        device_->name.c_str(), overdue * 1000.0);
+            } else if (!late && overdueSince) {
+                logLine("Wolfe device \"%s\": its requests are completed on time again, after %.1f s behind",
+                        device_->name.c_str(), now - overdueSince);
+                overdueSince = 0;
+            }
+        }
+    }
+
     void complete(const Urb& urb) {
         raise(device_->lateMaxUs, (long)((nowSeconds() - urb.due) * 1e6));
 
@@ -566,6 +635,7 @@ private:
     Stream data_, feedback_;
     std::atomic<double> speakerError_{0};  // frames the speaker's samples are ahead of the graph's clock
     double speakerLead_ = 0;               // least time ahead of their due time that requests come in, lately
+    std::atomic<double> lastDataRequest_{0};  // when Windows last sent an audio request (for the watch)
     bool alternate_ = false;
     uint8_t configuration_ = 0;
 
