@@ -267,6 +267,11 @@ void Graph::setLinkGain(const std::string& from, const std::string& to, float ga
     if (auto link = findLink(from, to)) link->gain = gain;
 }
 
+float Graph::linkGain(const std::string& from, const std::string& to) const {
+    auto link = findLink(from, to);
+    return link ? link->gain.load() : -1.0f;
+}
+
 void Graph::setEffectParameter(const std::string& id, int index, float value) {
     if (auto found = effects_.find(id); found != effects_.end()) found->second->setParameter(index, value);
 }
