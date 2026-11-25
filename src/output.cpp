@@ -69,13 +69,16 @@ void Output::setStatus(const std::string& text) {
 
 void Output::threadMain() {
     ComApartment com;
+    RetryLog retries("output \"" + device_ + "\"");
 
     while (WaitForSingleObject(stopEvent_, 0) != WAIT_OBJECT_0) {
         try {
             open();
+            retries.succeeded();
             run();
         } catch (const std::exception& error) {
             setStatus(error.what());
+            retries.failed(error.what());
         }
         close();
         if (WaitForSingleObject(stopEvent_, 1000) == WAIT_OBJECT_0) break;

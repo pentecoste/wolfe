@@ -119,6 +119,34 @@ void logLine(const char* format, ...) {
     logger.add(stamp + text + "\n");
 }
 
+void RetryLog::failed(const std::string& error) {
+    const double now = nowSeconds();
+    if (since_ == 0) {
+        since_ = now;
+        nextReport_ = now + 10.0;
+        attempts_ = 0;
+        reported_ = false;
+    }
+    attempts_++;
+    if (now < nextReport_) return;
+    const double elapsed = now - since_;
+    logLine("%s: still failing, %ld attempts in %.0f s: %s", what_.c_str(), attempts_, elapsed, error.c_str());
+    reported_ = true;
+    // Six times as long each time (1 min, 6 min, 36 min...), at most an hour apart.
+    nextReport_ = since_ + std::min(elapsed * 6.0, elapsed + 3600.0);
+}
+
+void RetryLog::succeeded() {
+    // Only after a "still failing": a device that comes back at the first
+    // retry already says so in its status.
+    if (reported_) {
+        logLine("%s: working again, after %ld failed attempts in %.0f s", what_.c_str(), attempts_,
+                nowSeconds() - since_);
+    }
+    since_ = 0;
+    reported_ = false;
+}
+
 AudioThreadPriority::AudioThreadPriority() {
     DWORD taskIndex = 0;
     task_ = AvSetMmThreadCharacteristicsW(L"Pro Audio", &taskIndex);
