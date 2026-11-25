@@ -178,14 +178,18 @@ void Input::watcherMain() {
 
 void Input::threadMain() {
     ComApartment com;
+    RetryLog retries("input \"" + spec_.target + "\"");
 
     while (WaitForSingleObject(stopEvent_, 0) != WAIT_OBJECT_0) {
         retryNow_ = false;
         try {
             open();
+            retries.succeeded();
             run();
         } catch (const std::exception& error) {
             setStatus(error.what());
+            // Switching to another process of the application is not a failure.
+            if (!retryNow_) retries.failed(error.what());
         }
         close();
         // Device unplugged, application not running yet...: try again shortly.

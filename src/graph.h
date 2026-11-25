@@ -126,6 +126,7 @@ public:
     void addLink(const std::string& from, const std::string& to, float gain = 1.0f);
     void removeLink(const std::string& from, const std::string& to);
     void setLinkGain(const std::string& from, const std::string& to, float gain);
+    float linkGain(const std::string& from, const std::string& to) const;  // -1 with no such link
     // A setting of an effect, by its index in the type's parameters (see EffectType).
     void setEffectParameter(const std::string& id, int index, float value);
     // A muted node passes on silence: a source or an effect gives silence to

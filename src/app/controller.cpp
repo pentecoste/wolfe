@@ -478,6 +478,9 @@ std::string Controller::link(int fromUid, int toUid, bool muted) {
         syncEngine(toUid);
         return error.what();
     }
+    // A selector's choice may be the link just made (a graph being loaded
+    // brings its links one by one): the one let through until now goes silent.
+    if (to->isSelector()) applyGains(toUid);
     markDirty();
     return {};
 }
@@ -610,6 +613,13 @@ std::set<int> Controller::silentLinks() const {
         if (!carries(link) || (to && to->muted)) result.insert(link.uid);
     }
     return result;
+}
+
+float Controller::engineGain(int linkUid) const {
+    for (const Connection& link : links_) {
+        if (link.uid == linkUid) return graph_.linkGain(node(link.from)->id, node(link.to)->id);
+    }
+    return -1.0f;
 }
 
 std::string Controller::connect(int fromUid, int toUid) { return link(fromUid, toUid); }

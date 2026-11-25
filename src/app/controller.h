@@ -174,6 +174,9 @@ public:
     // The links that carry no sound because of a mute (of a box or a link,
     // here or anywhere before) or a selector, for the canvas to grey out.
     std::set<int> silentLinks() const;
+    // What the engine itself carries on a link: 1, 0 for silence, -1 for a
+    // link it does not have (for the tests).
+    float engineGain(int linkUid) const;
 
     // An effect of one of the types effectTypes() offers. 0 for any other type.
     int addEffect(const std::string& type, float x, float y);

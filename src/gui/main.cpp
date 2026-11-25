@@ -85,6 +85,11 @@ bool createGraphics(HWND window) {
 }
 
 void destroyGraphics() {
+    if (g_context) {
+        // Nothing of the old device may be kept waiting for a later release.
+        g_context->ClearState();
+        g_context->Flush();
+    }
     releaseTarget();
     if (g_swapChain) g_swapChain->Release();
     if (g_context) g_context->Release();
@@ -92,6 +97,35 @@ void destroyGraphics() {
     g_swapChain = nullptr;
     g_context = nullptr;
     g_device = nullptr;
+}
+
+// After the computer sleeps, or the graphics driver restarts or is updated,
+// the graphics device can be lost: from then on drawing does nothing and the
+// window stays white. It is given a new one, and ImGui's renderer with it
+// (which makes its textures again by itself). Without a device to be had,
+// there is nothing drawn until the next try.
+double g_nextGraphicsTry = 0;
+
+bool restartGraphics(HWND window) {
+    ImGui_ImplDX11_Shutdown();
+    destroyGraphics();
+    if (!createGraphics(window)) {
+        destroyGraphics();
+        g_nextGraphicsTry = nowSeconds() + 1.0;
+        return false;
+    }
+    ImGui_ImplDX11_Init(g_device, g_context);
+    return true;
+}
+
+// Each frame, after it is presented: whether the device is still there.
+void checkGraphics(HWND window, HRESULT presented) {
+    const HRESULT reason = g_device->GetDeviceRemovedReason();
+    if (reason == S_OK && presented != DXGI_ERROR_DEVICE_REMOVED && presented != DXGI_ERROR_DEVICE_RESET) return;
+    logLine("window: the graphics device was lost (present 0x%08lX, reason 0x%08lX), making a new one",
+            (unsigned long)presented, (unsigned long)reason);
+    if (restartGraphics(window)) logLine("window: drawing again");
+    else logLine("window: no graphics device to be had yet, trying again every second");
 }
 
 // --- window and notification area ------------------------------------------
@@ -332,7 +366,18 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE, LPSTR, int) {
             const double now = nowSeconds();
             controller.setWatched(IsWindowVisible(window) && !IsIconic(window));
             controller.update(now);
-            if (!IsWindowVisible(window) || IsIconic(window) || !g_target) continue;
+            if (!IsWindowVisible(window) || IsIconic(window)) continue;
+            if (!g_device && now >= g_nextGraphicsTry) {
+                // The last device was lost and no new one could be had then.
+                if (createGraphics(window)) {
+                    ImGui_ImplDX11_Init(g_device, g_context);
+                    logLine("window: drawing again");
+                } else {
+                    destroyGraphics();
+                    g_nextGraphicsTry = now + 1.0;
+                }
+            }
+            if (!g_target) continue;
 
             if (selfTest && !selfTest->step()) {
                 DestroyWindow(window);
@@ -347,7 +392,7 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE, LPSTR, int) {
             g_context->OMSetRenderTargets(1, &g_target, nullptr);
             g_context->ClearRenderTargetView(g_target, background);
             ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
-            g_swapChain->Present(1, 0);
+            checkGraphics(window, g_swapChain->Present(1, 0));
 
             if (editor.exitRequested) {
                 editor.exitRequested = false;
@@ -388,7 +433,7 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE, LPSTR, int) {
     }  // the controller saves the graph and stops the engine here
 
     Shell_NotifyIconW(NIM_DELETE, &g_trayIcon);
-    ImGui_ImplDX11_Shutdown();
+    if (g_device) ImGui_ImplDX11_Shutdown();  // none while a lost device has not been replaced
     ImGui_ImplWin32_Shutdown();
     ImNodes::DestroyContext();
     ImGui::DestroyContext();

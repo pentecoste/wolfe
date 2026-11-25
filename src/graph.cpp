@@ -267,6 +267,11 @@ void Graph::setLinkGain(const std::string& from, const std::string& to, float ga
     if (auto link = findLink(from, to)) link->gain = gain;
 }
 
+float Graph::linkGain(const std::string& from, const std::string& to) const {
+    auto link = findLink(from, to);
+    return link ? link->gain.load() : -1.0f;
+}
+
 void Graph::setEffectParameter(const std::string& id, int index, float value) {
     if (auto found = effects_.find(id); found != effects_.end()) found->second->setParameter(index, value);
 }
@@ -450,6 +455,7 @@ void Graph::cycleMain() {
                 const double end = clock_->timeOf((double)(nextCycle_ + 1) * kQuantum);
                 if (now - end > kResyncSeconds) {
                     const int64_t present = (int64_t)std::floor(clock_->frameAt(now) / kQuantum) - 1;
+                    logLine("graph: %.0f ms behind, jumping to the present", (now - end) * 1000.0);
                     skipped_.fetch_add((uint64_t)std::max<int64_t>(0, present - nextCycle_), std::memory_order_relaxed);
                     nextCycle_ = present;
                     wait = 0;

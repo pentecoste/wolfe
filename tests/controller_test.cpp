@@ -598,6 +598,11 @@ void testSelector() {
     }
     const int chosen = selector ? reloaded.selectedInput(selector->uid) : 0;
     expect(chosen && reloaded.node(chosen)->type == "gain", "and it is the same one after loading");
+    bool onlyChosenHeard = chosen != 0;
+    for (int from : selector ? reloaded.inputsOf(selector->uid) : std::vector<int>()) {
+        onlyChosenHeard &= reloaded.engineGain(linkBetween(reloaded, from, selector->uid)) == (from == chosen ? 1.0f : 0.0f);
+    }
+    expect(onlyChosenHeard, "the engine lets through that one alone, though it was linked last");
     expect(chosen && reloaded.inputName(selector->uid, chosen) == "Musica più bassa" && selector->inputNames.size() == 2,
            "with the names given to its inputs");
     const Node* mic = firstOf(reloaded, NodeKind::Input);
